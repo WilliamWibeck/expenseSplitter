@@ -7,7 +7,7 @@ plugins {
 }
 
 android {
-    namespace = "com.example.expense_splitter"
+    namespace = "com.example.dela"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
 

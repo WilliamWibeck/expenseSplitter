@@ -1,11 +1,11 @@
 {
-    "name": "expense_splitter",
-    "short_name": "expense_splitter",
+    "name": "dela",
+    "short_name": "dela",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0175C2",
     "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
+    "description": "Split expenses easily with friends.",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [

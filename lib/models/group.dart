@@ -42,4 +42,17 @@ class Group {
   }
 }
 
+@immutable
+class SettlementInfo {
+  const SettlementInfo({
+    required this.debtorId,
+    required this.creditorId,
+    required this.amount,
+  });
+  
+  final String debtorId;
+  final String creditorId;
+  final int amount; // Amount in cents
+}
+
 
