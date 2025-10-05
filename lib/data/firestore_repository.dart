@@ -2,6 +2,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:riverpod/riverpod.dart';
 import '../models/group.dart';
 import '../models/expense.dart';
+import '../models/settlement.dart';
 
 class FirestoreRepository {
   FirestoreRepository(this._db);
@@ -93,6 +94,74 @@ class FirestoreRepository {
     const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
     final random = DateTime.now().millisecondsSinceEpoch % 1000000;
     return random.toString().padLeft(6, '0');
+  }
+
+  // Settlements
+  Future<String> createGroupSettlement(GroupSettlement settlement) async {
+    final doc = await _db
+        .collection('groups')
+        .doc(settlement.groupId)
+        .collection('settlements')
+        .add(settlement.toJson());
+    return doc.id;
+  }
+
+  Stream<List<GroupSettlement>> watchGroupSettlements(String groupId) {
+    return _db
+        .collection('groups')
+        .doc(groupId)
+        .collection('settlements')
+        .orderBy('createdAtMs', descending: true)
+        .snapshots()
+        .map((snap) => snap.docs
+            .map((d) => GroupSettlement.fromDoc(d.id, d.data()))
+            .toList());
+  }
+
+  Future<void> updateSettlementPayment({
+    required String groupId,
+    required String settlementId,
+    required int paymentIndex,
+    required SettlementPayment payment,
+  }) async {
+    final settlementRef = _db
+        .collection('groups')
+        .doc(groupId)
+        .collection('settlements')
+        .doc(settlementId);
+
+    await _db.runTransaction((transaction) async {
+      final settlementDoc = await transaction.get(settlementRef);
+      if (!settlementDoc.exists) return;
+
+      final data = settlementDoc.data()!;
+      final paymentsData = List<dynamic>.from(data['payments'] ?? []);
+      
+      if (paymentIndex < paymentsData.length) {
+        paymentsData[paymentIndex] = payment.toJson();
+        
+        // Check if all payments are complete
+        final allComplete = paymentsData.every((p) => p['isCompleted'] == true);
+        
+        transaction.update(settlementRef, {
+          'payments': paymentsData,
+          if (allComplete && data['completedAtMs'] == null)
+            'completedAtMs': DateTime.now().millisecondsSinceEpoch,
+        });
+      }
+    });
+  }
+
+  Future<void> deleteGroupSettlement({
+    required String groupId,
+    required String settlementId,
+  }) async {
+    await _db
+        .collection('groups')
+        .doc(groupId)
+        .collection('settlements')
+        .doc(settlementId)
+        .delete();
   }
 }
 

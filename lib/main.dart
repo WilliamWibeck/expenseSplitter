@@ -1,5 +1,6 @@
 import 'dart:math';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:velocity_x/velocity_x.dart';
@@ -11,11 +12,13 @@ import 'firebase_options.dart';
 import 'data/firestore_repository.dart';
 import 'models/group.dart';
 import 'models/expense.dart';
+import 'models/settlement.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
 import 'notifications/notifications_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'services/swish_return_detector.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -111,6 +114,13 @@ class DeveloperGroupsNotifier extends Notifier<List<Group>> {
   
   void addGroup(Group group) {
     state = [...state, group];
+  }
+  
+  void updateGroup(Group updatedGroup) {
+    state = [
+      for (final group in state)
+        if (group.id == updatedGroup.id) updatedGroup else group
+    ];
   }
 }
 
@@ -266,6 +276,22 @@ String _getUserDisplayName(String userId) {
     case 'user_grace':
       return 'Grace';
     default:
+      // Handle dynamically invited users
+      if (userId.startsWith('user_phone_')) {
+        final phoneDigits = userId.substring(11); // Remove 'user_phone_' prefix
+        return 'User $phoneDigits'; // Show as "User 1234" for phone invites
+      } else if (userId.startsWith('user_email_')) {
+        final emailUser = userId.substring(11); // Remove 'user_email_' prefix
+        return emailUser.split('.').map((part) => 
+          part.isEmpty ? '' : '${part[0].toUpperCase()}${part.substring(1)}'
+        ).join(' '); // Convert "john.doe" to "John Doe"
+      } else if (userId.startsWith('user_')) {
+        // Legacy support for old name-based users
+        final name = userId.substring(5); // Remove 'user_' prefix
+        return name.split('_').map((word) => 
+          word.isEmpty ? '' : '${word[0].toUpperCase()}${word.substring(1)}'
+        ).join(' ');
+      }
       return userId;
   }
 }
@@ -820,7 +846,151 @@ class MyApp extends ConsumerWidget {
       darkTheme: darkTheme,
       themeMode: themeMode,
       routerConfig: router,
+      builder: (context, child) {
+        return SwishReturnWrapper(child: child ?? const SizedBox.shrink());
+      },
     );
+  }
+}
+
+class SwishReturnWrapper extends StatefulWidget {
+  final Widget child;
+  
+  const SwishReturnWrapper({super.key, required this.child});
+  
+  @override
+  State<SwishReturnWrapper> createState() => _SwishReturnWrapperState();
+}
+
+class _SwishReturnWrapperState extends State<SwishReturnWrapper> with WidgetsBindingObserver {
+  final SwishReturnDetector _detector = SwishReturnDetector();
+  
+  @override
+  void initState() {
+    super.initState();
+    _initializeDetector();
+  }
+  
+  @override
+  void dispose() {
+    _detector.dispose();
+    super.dispose();
+  }
+  
+  Future<void> _initializeDetector() async {
+    await _detector.loadPersistentData();
+    _detector.initialize(
+      onReturnFromSwish: _showSwishReturnDialog,
+    );
+  }
+  
+  void _showSwishReturnDialog(List<PendingSwishPayment> pendingPayments) {
+    if (pendingPayments.isEmpty || !mounted) return;
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        title: Row(
+          children: [
+            Icon(Icons.payment, color: Colors.blue.shade600),
+            const SizedBox(width: 8),
+            const Text('Confirm Swish Payments'),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Did you complete these Swish payments?',
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500),
+            ),
+            const SizedBox(height: 16),
+            ...pendingPayments.map((payment) => Container(
+              margin: const EdgeInsets.only(bottom: 8),
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.blue.shade50,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.blue.shade200),
+              ),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          '\$${(payment.amountCents / 100).toStringAsFixed(2)}',
+                          style: const TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        Text(
+                          'To: ${_getDisplayName(payment.creditorId)}',
+                          style: TextStyle(
+                            fontSize: 14,
+                            color: Colors.grey.shade600,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Icon(Icons.arrow_forward, color: Colors.blue.shade600),
+                ],
+              ),
+            )),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.of(ctx).pop();
+              _detector.clearAllPayments();
+            },
+            child: const Text('No, Not Yet'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.of(ctx).pop();
+              _confirmAllPayments(pendingPayments);
+            },
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
+            child: const Text(
+              'Yes, All Completed',
+              style: TextStyle(color: Colors.white),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _confirmAllPayments(List<PendingSwishPayment> payments) {
+    _detector.clearAllPayments();
+    
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('${payments.length} payment(s) marked as completed! 🎉'),
+          backgroundColor: Colors.green,
+          duration: const Duration(seconds: 4),
+        ),
+      );
+    }
+  }
+
+  String _getDisplayName(String userId) {
+    if (userId == 'dev_user_123') return 'You';
+    if (userId == 'developer_user') return 'Developer';
+    return 'User ${userId.substring(0, min(8, userId.length))}';
+  }
+  
+  @override
+  Widget build(BuildContext context) {
+    return widget.child;
   }
 }
 
@@ -1590,33 +1760,11 @@ class _GroupsScreenState extends ConsumerState<GroupsScreen> {
                         ],
                       ),
                     ),
-                    const SizedBox(height: 100), // Space for FAB
                   ],
                 ),
               ),
             ),
           ],
-        ),
-      ),
-      floatingActionButton: Container(
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(28),
-          gradient: const LinearGradient(
-            colors: [Color(0xFF2D3748), Color(0xFF1A202C)],
-          ),
-          boxShadow: [
-            BoxShadow(
-              color: const Color(0xFF2D3748).withOpacity(0.4),
-              blurRadius: 20,
-              offset: const Offset(0, 10),
-            ),
-          ],
-        ),
-        child: FloatingActionButton(
-          onPressed: () => _showNewGroupDialog(context, ref),
-          backgroundColor: Colors.transparent,
-          elevation: 0,
-          child: const Icon(Icons.add, color: Colors.white, size: 28),
         ),
       ),
     );
@@ -1759,6 +1907,14 @@ class _GroupsScreenState extends ConsumerState<GroupsScreen> {
     final isExpanded = _expandedGroups[group.id] ?? false;
     final devMode = ref.watch(developerModeProvider);
     
+    // Get expenses for this group to calculate balance
+    final expenses = devMode 
+      ? ref.watch(developerExpensesProvider(group.id))
+      : <Expense>[];
+    
+    // Calculate user's balance in this group
+    final userBalance = _calculateUserBalanceInGroup(group, expenses);
+    
     return Container(
       margin: const EdgeInsets.only(bottom: 16),
       decoration: BoxDecoration(
@@ -1808,8 +1964,6 @@ class _GroupsScreenState extends ConsumerState<GroupsScreen> {
                                 fontSize: 18,
                                 fontWeight: FontWeight.w600,
                                 color: Color(0xFF2D3748),
-                                decoration: TextDecoration.underline,
-                                decorationColor: Color(0xFF3182CE),
                               ),
                             ),
                           ),
@@ -1898,17 +2052,54 @@ class _GroupsScreenState extends ConsumerState<GroupsScreen> {
                               ),
                               const SizedBox(height: 4),
                               Text(
-                                '\$0.00',
-                                style: const TextStyle(
+                                userBalance == 0 
+                                  ? 'Even' 
+                                  : userBalance > 0 
+                                    ? '+${_formatCents(userBalance)}' 
+                                    : _formatCents(userBalance),
+                                style: TextStyle(
                                   fontSize: 16,
                                   fontWeight: FontWeight.w600,
-                                  color: Color(0xFF2D3748),
+                                  color: userBalance == 0 
+                                    ? const Color(0xFF2D3748)
+                                    : userBalance > 0 
+                                      ? Colors.green.shade700
+                                      : Colors.red.shade700,
                                 ),
                               ),
                             ],
                           ),
                         ),
-                        // View Group button
+                        // Share Group button
+                        Container(
+                          margin: const EdgeInsets.only(right: 8),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF10B981).withOpacity(0.1),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Material(
+                            color: Colors.transparent,
+                            child: InkWell(
+                              borderRadius: BorderRadius.circular(8),
+                              onTap: () {
+                                _shareGroupLink(context, group);
+                              },
+                              child: Container(
+                                padding: const EdgeInsets.all(8),
+                                constraints: const BoxConstraints(
+                                  minWidth: 36,
+                                  minHeight: 36,
+                                ),
+                                child: const Icon(
+                                  Icons.share,
+                                  color: Color(0xFF10B981),
+                                  size: 20,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                        // Group Settings button
                         Container(
                           margin: const EdgeInsets.only(right: 8),
                           decoration: BoxDecoration(
@@ -1920,7 +2111,7 @@ class _GroupsScreenState extends ConsumerState<GroupsScreen> {
                             child: InkWell(
                               borderRadius: BorderRadius.circular(8),
                               onTap: () {
-                                context.go('/groups/${group.id}/analysis');
+                                _showGroupSettingsDialog(context, ref, group);
                               },
                               child: Container(
                                 padding: const EdgeInsets.all(8),
@@ -1929,7 +2120,7 @@ class _GroupsScreenState extends ConsumerState<GroupsScreen> {
                                   minHeight: 36,
                                 ),
                                 child: const Icon(
-                                  Icons.group,
+                                  Icons.settings,
                                   color: Color(0xFF2D3748),
                                   size: 20,
                                 ),
@@ -1999,41 +2190,282 @@ class _GroupsScreenState extends ConsumerState<GroupsScreen> {
                             color: const Color(0xFF2D3748).withOpacity(0.1),
                             borderRadius: BorderRadius.circular(8),
                           ),
-                          child: PopupMenuButton<String>(
-                            onSelected: (value) {
-                              if (value == 'manual') {
-                                // Show add expense dialog for this group
-                                showDialog(
-                                  context: context,
-                                  builder: (ctx) => _AddExpenseDialog(groupId: group.id),
-                                );
-                              } else if (value == 'scan') {
-                                // Navigate to receipt scan screen
-                                context.go('/scan');
-                              }
+                          child: GestureDetector(
+                            onTap: () {
+                              showDialog(
+                                context: context,
+                                barrierDismissible: true,
+                                builder: (ctx) => Dialog(
+                                  backgroundColor: Colors.transparent,
+                                  child: Container(
+                                    constraints: const BoxConstraints(maxWidth: 320),
+                                    decoration: BoxDecoration(
+                                      color: Theme.of(context).brightness == Brightness.dark 
+                                          ? const Color(0xFF2D3748) 
+                                          : Theme.of(context).colorScheme.surface,
+                                      borderRadius: BorderRadius.circular(20),
+                                      boxShadow: [
+                                        BoxShadow(
+                                          color: Theme.of(context).brightness == Brightness.dark
+                                              ? Colors.black.withOpacity(0.3)
+                                              : Colors.black.withOpacity(0.1),
+                                          blurRadius: 20,
+                                          offset: const Offset(0, 10),
+                                        ),
+                                      ],
+                                    ),
+                                    child: Padding(
+                                      padding: const EdgeInsets.all(24),
+                                      child: Column(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          // Header
+                                          Row(
+                                            children: [
+                                              Container(
+                                                padding: const EdgeInsets.all(12),
+                                                decoration: BoxDecoration(
+                                                  color: const Color(0xFF4F46E5).withOpacity(0.2),
+                                                  borderRadius: BorderRadius.circular(12),
+                                                ),
+                                                child: const Icon(
+                                                  Icons.add_circle_outline,
+                                                  color: Color(0xFF6366F1),
+                                                  size: 24,
+                                                ),
+                                              ),
+                                              const SizedBox(width: 16),
+                                              Expanded(
+                                                child: Column(
+                                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                                  children: [
+                                                    Text(
+                                                      'Add New Expense',
+                                                      style: TextStyle(
+                                                        fontSize: 20,
+                                                        fontWeight: FontWeight.w600,
+                                                        color: Theme.of(context).brightness == Brightness.dark
+                                                            ? Colors.white
+                                                            : const Color(0xFF1A202C),
+                                                      ),
+                                                    ),
+                                                    SizedBox(height: 4),
+                                                    Text(
+                                                      'Choose how to add your expense',
+                                                      style: TextStyle(
+                                                        fontSize: 14,
+                                                        color: Theme.of(context).brightness == Brightness.dark
+                                                            ? const Color(0xFFA0AEC0)
+                                                            : const Color(0xFF718096),
+                                                      ),
+                                                    ),
+                                                  ],
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                          const SizedBox(height: 24),
+                                          
+                                          // Manual entry option
+                                          Container(
+                                            width: double.infinity,
+                                            margin: const EdgeInsets.only(bottom: 12),
+                                            child: Material(
+                                              color: Colors.transparent,
+                                              child: InkWell(
+                                                onTap: () {
+                                                  Navigator.of(ctx).pop();
+                                                  showDialog(
+                                                    context: context,
+                                                    builder: (dialogCtx) => _AddExpenseDialog(groupId: group.id),
+                                                  );
+                                                },
+                                                borderRadius: BorderRadius.circular(16),
+                                                child: Container(
+                                                  padding: const EdgeInsets.all(20),
+                                                  decoration: BoxDecoration(
+                                                    border: Border.all(
+                                                      color: Theme.of(context).brightness == Brightness.dark
+                                                          ? const Color(0xFF4A5568)
+                                                          : const Color(0xFFE2E8F0),
+                                                      width: 1.5,
+                                                    ),
+                                                    borderRadius: BorderRadius.circular(16),
+                                                    gradient: LinearGradient(
+                                                      begin: Alignment.topLeft,
+                                                      end: Alignment.bottomRight,
+                                                      colors: Theme.of(context).brightness == Brightness.dark
+                                                          ? [
+                                                              const Color(0xFF10B981).withOpacity(0.15),
+                                                              const Color(0xFF059669).withOpacity(0.08),
+                                                            ]
+                                                          : [
+                                                              const Color(0xFF10B981).withOpacity(0.05),
+                                                              const Color(0xFF059669).withOpacity(0.02),
+                                                            ],
+                                                    ),
+                                                  ),
+                                                  child: Row(
+                                                    children: [
+                                                      Container(
+                                                        padding: const EdgeInsets.all(12),
+                                                        decoration: BoxDecoration(
+                                                          color: Theme.of(context).brightness == Brightness.dark
+                                                              ? const Color(0xFF10B981).withOpacity(0.2)
+                                                              : const Color(0xFF10B981).withOpacity(0.1),
+                                                          borderRadius: BorderRadius.circular(12),
+                                                        ),
+                                                        child: Icon(
+                                                          Icons.edit_outlined,
+                                                          color: Theme.of(context).brightness == Brightness.dark
+                                                              ? const Color(0xFF34D399)
+                                                              : const Color(0xFF059669),
+                                                          size: 24,
+                                                        ),
+                                                      ),
+                                                      const SizedBox(width: 16),
+                                                      Expanded(
+                                                        child: Column(
+                                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                                          children: [
+                                                            Text(
+                                                              'Manual Entry',
+                                                              style: TextStyle(
+                                                                fontSize: 16,
+                                                                fontWeight: FontWeight.w600,
+                                                                color: Theme.of(context).brightness == Brightness.dark
+                                                                    ? Colors.white
+                                                                    : const Color(0xFF1A202C),
+                                                              ),
+                                                            ),
+                                                            SizedBox(height: 4),
+                                                            Text(
+                                                              'Enter expense details manually',
+                                                              style: TextStyle(
+                                                                fontSize: 14,
+                                                                color: Theme.of(context).brightness == Brightness.dark
+                                                                    ? const Color(0xFFA0AEC0)
+                                                                    : const Color(0xFF718096),
+                                                              ),
+                                                            ),
+                                                          ],
+                                                        ),
+                                                      ),
+                                                      Icon(
+                                                        Icons.chevron_right,
+                                                        color: Theme.of(context).brightness == Brightness.dark
+                                                            ? const Color(0xFFA0AEC0)
+                                                            : const Color(0xFF718096),
+                                                        size: 20,
+                                                      ),
+                                                    ],
+                                                  ),
+                                                ),
+                                              ),
+                                            ),
+                                          ),
+                                          
+                                          // Receipt scan option
+                                          Container(
+                                            width: double.infinity,
+                                            child: Material(
+                                              color: Colors.transparent,
+                                              child: InkWell(
+                                                onTap: () {
+                                                  Navigator.of(ctx).pop();
+                                                  context.go('/scan');
+                                                },
+                                                borderRadius: BorderRadius.circular(16),
+                                                child: Container(
+                                                  padding: const EdgeInsets.all(20),
+                                                  decoration: BoxDecoration(
+                                                    border: Border.all(
+                                                      color: Theme.of(context).brightness == Brightness.dark
+                                                          ? const Color(0xFF4A5568)
+                                                          : const Color(0xFFE2E8F0),
+                                                      width: 1.5,
+                                                    ),
+                                                    borderRadius: BorderRadius.circular(16),
+                                                    gradient: LinearGradient(
+                                                      begin: Alignment.topLeft,
+                                                      end: Alignment.bottomRight,
+                                                      colors: Theme.of(context).brightness == Brightness.dark
+                                                          ? [
+                                                              const Color(0xFF8B5CF6).withOpacity(0.15),
+                                                              const Color(0xFF7C3AED).withOpacity(0.08),
+                                                            ]
+                                                          : [
+                                                              const Color(0xFF8B5CF6).withOpacity(0.05),
+                                                              const Color(0xFF7C3AED).withOpacity(0.02),
+                                                            ],
+                                                    ),
+                                                  ),
+                                                  child: Row(
+                                                    children: [
+                                                      Container(
+                                                        padding: const EdgeInsets.all(12),
+                                                        decoration: BoxDecoration(
+                                                          color: Theme.of(context).brightness == Brightness.dark
+                                                              ? const Color(0xFF8B5CF6).withOpacity(0.2)
+                                                              : const Color(0xFF8B5CF6).withOpacity(0.1),
+                                                          borderRadius: BorderRadius.circular(12),
+                                                        ),
+                                                        child: Icon(
+                                                          Icons.camera_alt_outlined,
+                                                          color: Theme.of(context).brightness == Brightness.dark
+                                                              ? const Color(0xFFA78BFA)
+                                                              : const Color(0xFF7C3AED),
+                                                          size: 24,
+                                                        ),
+                                                      ),
+                                                      const SizedBox(width: 16),
+                                                      Expanded(
+                                                        child: Column(
+                                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                                          children: [
+                                                            Text(
+                                                              'Scan Receipt',
+                                                              style: TextStyle(
+                                                                fontSize: 16,
+                                                                fontWeight: FontWeight.w600,
+                                                                color: Theme.of(context).brightness == Brightness.dark
+                                                                    ? Colors.white
+                                                                    : const Color(0xFF1A202C),
+                                                              ),
+                                                            ),
+                                                            SizedBox(height: 4),
+                                                            Text(
+                                                              'Use camera to capture receipt',
+                                                              style: TextStyle(
+                                                                fontSize: 14,
+                                                                color: Theme.of(context).brightness == Brightness.dark
+                                                                    ? const Color(0xFFA0AEC0)
+                                                                    : const Color(0xFF718096),
+                                                              ),
+                                                            ),
+                                                          ],
+                                                        ),
+                                                      ),
+                                                      Icon(
+                                                        Icons.chevron_right,
+                                                        color: Theme.of(context).brightness == Brightness.dark
+                                                            ? const Color(0xFFA0AEC0)
+                                                            : const Color(0xFF718096),
+                                                        size: 20,
+                                                      ),
+                                                    ],
+                                                  ),
+                                                ),
+                                              ),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              );
                             },
-                            itemBuilder: (context) => [
-                              const PopupMenuItem<String>(
-                                value: 'manual',
-                                child: Row(
-                                  children: [
-                                    Icon(Icons.edit, size: 18),
-                                    SizedBox(width: 8),
-                                    Text('Add Expense Manually'),
-                                  ],
-                                ),
-                              ),
-                              const PopupMenuItem<String>(
-                                value: 'scan',
-                                child: Row(
-                                  children: [
-                                    Icon(Icons.camera_alt, size: 18),
-                                    SizedBox(width: 8),
-                                    Text('Scan Receipt'),
-                                  ],
-                                ),
-                              ),
-                            ],
                             child: Container(
                               padding: const EdgeInsets.all(8),
                               constraints: const BoxConstraints(
@@ -2292,13 +2724,136 @@ class _GroupsScreenState extends ConsumerState<GroupsScreen> {
   }
 
   String _getUserInitials(String userId) {
-    // Generate initials from user ID (for demo purposes)
-    if (userId == 'dev_user_123') return 'DU';
-    if (userId.startsWith('user_')) {
-      final number = userId.split('_')[1];
-      return 'U$number';
+    final displayName = _getUserDisplayName(userId);
+    
+    // Split into words and take first letter of each
+    final words = displayName.split(' ');
+    if (words.length >= 2) {
+      // For multi-word names, take first letter of first two words
+      return '${words[0][0]}${words[1][0]}'.toUpperCase();
+    } else if (words.isNotEmpty && words[0].length >= 2) {
+      // For single word names, take first two letters
+      return words[0].substring(0, 2).toUpperCase();
+    } else {
+      // Fallback to first letter
+      return displayName.isNotEmpty ? displayName[0].toUpperCase() : '?';
     }
-    return userId.substring(0, 2).toUpperCase();
+  }
+
+  void _copyShareCode(BuildContext context, String shareCode) {
+    if (shareCode.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('No share code available'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
+    
+    // Copy to clipboard
+    Clipboard.setData(ClipboardData(text: shareCode)).then((_) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Share code "$shareCode" copied to clipboard!'),
+          backgroundColor: Colors.green,
+          action: SnackBarAction(
+            label: 'Close',
+            textColor: Colors.white,
+            onPressed: () {},
+          ),
+        ),
+      );
+    });
+  }
+
+  void _shareGroupLink(BuildContext context, Group group) {
+    if (group.shareCode == null || group.shareCode!.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('No share code available for this group'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
+
+    // Generate a shareable link
+    final shareLink = 'https://expense-splitter.app/join/${group.shareCode}';
+    final shareText = '''
+Join "${group.name}" on Expense Splitter!
+
+Use this link: $shareLink
+Or enter share code: ${group.shareCode}
+
+Expense Splitter makes it easy to split bills and track expenses with friends!
+''';
+
+    // In a real app, you would use Share.share() from the share_plus package
+    // For now, we'll show a dialog with the shareable content
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Row(
+          children: [
+            Icon(Icons.share, color: Theme.of(context).colorScheme.primary),
+            const SizedBox(width: 8),
+            const Text('Share Group'),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Share this message with others:',
+              style: TextStyle(fontWeight: FontWeight.w600),
+            ),
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Theme.of(context).brightness == Brightness.dark
+                    ? Colors.grey.shade800
+                    : Colors.grey.shade100,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(
+                  color: Theme.of(context).brightness == Brightness.dark
+                      ? Colors.grey.shade600
+                      : Colors.grey.shade300,
+                ),
+              ),
+              child: Text(
+                shareText,
+                style: const TextStyle(fontSize: 14),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Close'),
+          ),
+          ElevatedButton.icon(
+            onPressed: () {
+              // Copy the share message to clipboard
+              Clipboard.setData(ClipboardData(text: shareText)).then((_) {
+                Navigator.of(context).pop();
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('Share message copied to clipboard!'),
+                    backgroundColor: Colors.green,
+                  ),
+                );
+              });
+            },
+            icon: const Icon(Icons.copy, size: 18),
+            label: const Text('Copy'),
+          ),
+        ],
+      ),
+    );
   }
 
   void _showNewGroupDialog(BuildContext context, WidgetRef ref) {
@@ -2410,14 +2965,531 @@ class _GroupsScreenState extends ConsumerState<GroupsScreen> {
       return;
     }
     
-    // Show settlement options
+    // Show settlement options with enhanced tracking
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (context) => _SettlementBottomSheet(
-        groupName: group.name,
+      builder: (context) => _EnhancedSettlementBottomSheet(
+        group: group,
         settlements: settlements,
+      ),
+    );
+  }
+
+  void _showGroupSettingsDialog(BuildContext context, WidgetRef ref, Group group) {
+    const String currentUserId = 'dev_user_123'; // In real app, get from auth
+    final bool isOwner = group.memberUserIds.isNotEmpty && group.memberUserIds.first == currentUserId;
+    
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Row(
+          children: [
+            Icon(Icons.settings, color: Theme.of(context).colorScheme.primary),
+            const SizedBox(width: 8),
+            Text('Group Settings'),
+          ],
+        ),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Group Info Section
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Icon(Icons.group, size: 20, color: Theme.of(context).colorScheme.primary),
+                          const SizedBox(width: 8),
+                          Text('Group Information', style: TextStyle(fontWeight: FontWeight.w600)),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      Text('Name: ${group.name}', style: TextStyle(fontSize: 14)),
+                      const SizedBox(height: 4),
+                      Text('ID: ${group.id}', style: TextStyle(fontSize: 12, color: Colors.grey)),
+                      const SizedBox(height: 4),
+                      Text('Created: ${_formatDate(group.createdAtMs)}', style: TextStyle(fontSize: 12, color: Colors.grey)),
+                      if (isOwner) ...[
+                        const SizedBox(height: 4),
+                        Text('Owner: You', style: TextStyle(fontSize: 12, color: Colors.green.shade700, fontWeight: FontWeight.w500)),
+                      ],
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              // Share Group Section
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Icon(Icons.share, size: 20, color: Theme.of(context).colorScheme.primary),
+                          const SizedBox(width: 8),
+                          Text('Share Group', style: TextStyle(fontWeight: FontWeight.w600)),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      // Share Code
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'Share Code',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: Colors.grey.shade600,
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                                ),
+                                const SizedBox(height: 4),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                                  decoration: BoxDecoration(
+                                    color: Theme.of(context).brightness == Brightness.dark
+                                        ? Colors.grey.shade800
+                                        : Colors.grey.shade100,
+                                    borderRadius: BorderRadius.circular(8),
+                                    border: Border.all(
+                                      color: Theme.of(context).brightness == Brightness.dark
+                                          ? Colors.grey.shade600
+                                          : Colors.grey.shade300,
+                                    ),
+                                  ),
+                                  child: Text(
+                                    group.shareCode ?? 'N/A',
+                                    style: TextStyle(
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.w600,
+                                      fontFamily: 'monospace',
+                                      color: Theme.of(context).colorScheme.primary,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          // Copy Code Button
+                          Container(
+                            decoration: BoxDecoration(
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(
+                                color: Theme.of(context).colorScheme.primary.withOpacity(0.3),
+                              ),
+                            ),
+                            child: IconButton(
+                              onPressed: () => _copyShareCode(context, group.shareCode ?? ''),
+                              icon: Icon(
+                                Icons.copy,
+                                color: Theme.of(context).colorScheme.primary,
+                                size: 20,
+                              ),
+                              tooltip: 'Copy Share Code',
+                              constraints: const BoxConstraints(
+                                minWidth: 40,
+                                minHeight: 40,
+                              ),
+                              padding: EdgeInsets.zero,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 16),
+                      // Share Link
+                      Container(
+                        width: double.infinity,
+                        child: ElevatedButton.icon(
+                          onPressed: () => _shareGroupLink(context, group),
+                          icon: const Icon(Icons.link, size: 18),
+                          label: const Text('Share Link'),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Theme.of(context).colorScheme.primary,
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(vertical: 12),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        'Share this link with others to invite them to join the group',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.grey.shade600,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              // Group Members Section
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Icon(Icons.people, size: 20, color: Theme.of(context).colorScheme.primary),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text('Members (${group.memberUserIds.length})', style: TextStyle(fontWeight: FontWeight.w600)),
+                          ),
+                          // Add Member Button
+                          IconButton(
+                            onPressed: () => _showAddMemberDialog(context, ref, group),
+                            icon: Icon(Icons.person_add, color: Theme.of(context).colorScheme.primary),
+                            tooltip: 'Add Member',
+                            constraints: const BoxConstraints(
+                              minWidth: 32,
+                              minHeight: 32,
+                            ),
+                            padding: EdgeInsets.zero,
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      ...group.memberUserIds.map((userId) => Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: Row(
+                          children: [
+                            CircleAvatar(
+                              radius: 16,
+                              backgroundColor: _getUserColor(userId),
+                              child: Text(
+                                _getUserInitials(userId),
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    _getUserDisplayName(userId),
+                                    style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
+                                  ),
+                                  if (userId == group.memberUserIds.first)
+                                    Text(
+                                      'Owner',
+                                      style: TextStyle(
+                                        fontSize: 11,
+                                        color: Colors.green.shade600,
+                                        fontWeight: FontWeight.w500,
+                                      ),
+                                    ),
+                                ],
+                              ),
+                            ),
+                            // Remove Member Button (only for owner and not for themselves)
+                            if (isOwner && userId != currentUserId)
+                              IconButton(
+                                onPressed: () => _showRemoveMemberDialog(context, ref, group, userId),
+                                icon: Icon(Icons.person_remove, color: Colors.red.shade600, size: 20),
+                                tooltip: 'Remove ${_getUserDisplayName(userId)}',
+                                constraints: const BoxConstraints(
+                                  minWidth: 32,
+                                  minHeight: 32,
+                                ),
+                                padding: EdgeInsets.zero,
+                              ),
+                          ],
+                        ),
+                      )),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Close'),
+          ),
+          ElevatedButton.icon(
+            onPressed: () {
+              Navigator.of(context).pop();
+              context.go('/groups/${group.id}/analysis');
+            },
+            icon: const Icon(Icons.analytics, size: 18),
+            label: const Text('View Analysis'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showAddMemberDialog(BuildContext context, WidgetRef ref, Group group) {
+    final TextEditingController contactController = TextEditingController();
+    String contactMethod = 'phone'; // Default to phone
+    
+    showDialog(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setState) => AlertDialog(
+          title: Row(
+            children: [
+              Icon(Icons.person_add, color: Theme.of(context).colorScheme.primary),
+              const SizedBox(width: 8),
+              const Text('Invite Member'),
+            ],
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('Invite someone to join this group:'),
+              const SizedBox(height: 16),
+              // Contact method selector
+              Row(
+                children: [
+                  Expanded(
+                    child: RadioListTile<String>(
+                      dense: true,
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('Phone Number', style: TextStyle(fontSize: 14)),
+                      value: 'phone',
+                      groupValue: contactMethod,
+                      onChanged: (value) {
+                        setState(() {
+                          contactMethod = value!;
+                          contactController.clear();
+                        });
+                      },
+                    ),
+                  ),
+                  Expanded(
+                    child: RadioListTile<String>(
+                      dense: true,
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('Email', style: TextStyle(fontSize: 14)),
+                      value: 'email',
+                      groupValue: contactMethod,
+                      onChanged: (value) {
+                        setState(() {
+                          contactMethod = value!;
+                          contactController.clear();
+                        });
+                      },
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                controller: contactController,
+                decoration: InputDecoration(
+                  labelText: contactMethod == 'phone' ? 'Phone Number' : 'Email Address',
+                  hintText: contactMethod == 'phone' ? '+46 70 123 45 67' : 'example@email.com',
+                  border: const OutlineInputBorder(),
+                  prefixIcon: Icon(contactMethod == 'phone' ? Icons.phone : Icons.email),
+                ),
+                keyboardType: contactMethod == 'phone' ? TextInputType.phone : TextInputType.emailAddress,
+              ),
+              const SizedBox(height: 16),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.blue.shade50,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.blue.shade200),
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.info, color: Colors.blue.shade600, size: 20),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        contactMethod == 'phone' 
+                          ? 'An invitation will be sent via SMS. They\'ll join with their registered name.'
+                          : 'An invitation will be sent via email. They\'ll join with their registered name.',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.blue.shade700,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                final contact = contactController.text.trim();
+                if (contact.isNotEmpty) {
+                  Navigator.of(context).pop();
+                  _inviteMemberToGroup(context, ref, group, contact, contactMethod);
+                }
+              },
+              child: const Text('Send Invitation'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showRemoveMemberDialog(BuildContext context, WidgetRef ref, Group group, String userId) {
+    final memberName = _getUserDisplayName(userId);
+    
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Row(
+          children: [
+            Icon(Icons.warning, color: Colors.orange.shade600),
+            const SizedBox(width: 8),
+            const Text('Remove Member'),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Are you sure you want to remove $memberName from the group?'),
+            const SizedBox(height: 16),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.orange.shade50,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.orange.shade200),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.warning, color: Colors.orange.shade600, size: 20),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'This action cannot be undone. The member will lose access to the group and its expenses.',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.orange.shade700,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.of(context).pop();
+              _removeMemberFromGroup(context, ref, group, userId);
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.red.shade600,
+              foregroundColor: Colors.white,
+            ),
+            child: const Text('Remove'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _inviteMemberToGroup(BuildContext context, WidgetRef ref, Group group, String contact, String contactMethod) {
+    // Simulate invitation process - in a real app, this would:
+    // 1. Send SMS/email invitation with group join link
+    // 2. When user accepts, they register with their name
+    // 3. Their user profile provides the display name
+    
+    // For demo purposes, generate a user based on contact info
+    String newUserId;
+    String simulatedName;
+    
+    if (contactMethod == 'phone') {
+      // Extract number for ID generation  
+      final cleanNumber = contact.replaceAll(RegExp(r'[^0-9]'), '');
+      newUserId = 'user_phone_${cleanNumber.substring(cleanNumber.length > 6 ? cleanNumber.length - 6 : 0)}';
+      simulatedName = 'User ${cleanNumber.substring(cleanNumber.length > 4 ? cleanNumber.length - 4 : 0)}'; // Last 4 digits
+    } else {
+      // Use email for ID generation
+      final emailUser = contact.split('@').first.toLowerCase();
+      newUserId = 'user_email_$emailUser';
+      simulatedName = emailUser.split('.').map((part) => 
+        part.isEmpty ? '' : '${part[0].toUpperCase()}${part.substring(1)}'
+      ).join(' ');
+    }
+    
+    // Check if user already exists (by contact)
+    if (group.memberUserIds.contains(newUserId)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('This ${contactMethod} is already a member of this group'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+    
+    // Add the new member to the group
+    final updatedMemberIds = [...group.memberUserIds, newUserId];
+    final updatedGroup = group.copyWith(memberUserIds: updatedMemberIds);
+    
+    // Update the developer groups provider
+    ref.read(developerGroupsProvider.notifier).updateGroup(updatedGroup);
+    
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Invitation sent to $contact. They will appear as "$simulatedName" when they join.'),
+        backgroundColor: Colors.green,
+        duration: const Duration(seconds: 4),
+      ),
+    );
+  }
+
+  void _removeMemberFromGroup(BuildContext context, WidgetRef ref, Group group, String userId) {
+    final memberName = _getUserDisplayName(userId);
+    
+    // Remove the member from the group
+    final updatedMemberIds = group.memberUserIds.where((id) => id != userId).toList();
+    final updatedGroup = group.copyWith(memberUserIds: updatedMemberIds);
+    
+    // Update the developer groups provider
+    ref.read(developerGroupsProvider.notifier).updateGroup(updatedGroup);
+    
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('$memberName has been removed from the group'),
+        backgroundColor: Colors.red,
       ),
     );
   }
@@ -2450,19 +3522,43 @@ class _GroupsScreenState extends ConsumerState<GroupsScreen> {
         return (expense.amountCents * percentage).round();
     }
   }
+  
+  // Helper function to calculate user's balance in a specific group
+  int _calculateUserBalanceInGroup(Group group, List<Expense> expenses) {
+    final settlements = _calculateGroupSettlementsForCard(group, expenses);
+    final currentUserId = fb.FirebaseAuth.instance.currentUser?.uid ?? 'dev_user_123';
+    
+    int userBalance = 0;
+    for (final settlement in settlements) {
+      if (settlement.debtorId == currentUserId) {
+        userBalance -= settlement.amount; // User owes money (negative)
+      } else if (settlement.creditorId == currentUserId) {
+        userBalance += settlement.amount; // User is owed money (positive)
+      }
+    }
+    return userBalance;
+  }
 }
 
-class _SettlementBottomSheet extends StatelessWidget {
-  const _SettlementBottomSheet({
-    required this.groupName,
+class _EnhancedSettlementBottomSheet extends StatelessWidget {
+  const _EnhancedSettlementBottomSheet({
+    required this.group,
     required this.settlements,
   });
   
-  final String groupName;
+  final Group group;
   final List<SettlementInfo> settlements;
 
   @override
   Widget build(BuildContext context) {
+    final currentUserId = fb.FirebaseAuth.instance.currentUser?.uid ?? 'dev_user_123';
+    final isGroupCreator = group.memberUserIds.isNotEmpty && group.memberUserIds.first == currentUserId;
+    
+    // Calculate settlement statistics for smart privacy display
+    final totalAmount = settlements.fold<int>(0, (sum, s) => sum + s.amount);
+    final myPayments = settlements.where((s) => s.debtorId == currentUserId).toList();
+    final paymentsToMe = settlements.where((s) => s.creditorId == currentUserId).toList();
+    
     return Container(
       decoration: const BoxDecoration(
         color: Colors.white,
@@ -2485,13 +3581,13 @@ class _SettlementBottomSheet extends StatelessWidget {
             ),
           ),
           
-          // Header
+          // Header with smart privacy info
           Padding(
             padding: const EdgeInsets.all(24),
             child: Column(
               children: [
                 Text(
-                  'Settle Expenses',
+                  'Settlement Session',
                   style: TextStyle(
                     fontSize: 24,
                     fontWeight: FontWeight.bold,
@@ -2500,10 +3596,80 @@ class _SettlementBottomSheet extends StatelessWidget {
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  groupName,
+                  group.name,
                   style: TextStyle(
                     fontSize: 16,
                     color: Colors.grey.shade600,
+                  ),
+                ),
+                const SizedBox(height: 16),
+                
+                // Smart privacy summary
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: Colors.blue.shade50,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: Colors.blue.shade200),
+                  ),
+                  child: Column(
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceAround,
+                        children: [
+                          _buildSummaryItem(
+                            'Total Outstanding',
+                            _formatCents(totalAmount),
+                            Icons.account_balance_wallet,
+                            Colors.blue.shade700,
+                          ),
+                          Container(
+                            height: 40,
+                            width: 1,
+                            color: Colors.blue.shade200,
+                          ),
+                          _buildSummaryItem(
+                            'Transactions',
+                            '${settlements.length}',
+                            Icons.swap_horiz,
+                            Colors.blue.shade700,
+                          ),
+                        ],
+                      ),
+                      if (myPayments.isNotEmpty || paymentsToMe.isNotEmpty) ...[
+                        const SizedBox(height: 12),
+                        const Divider(),
+                        const SizedBox(height: 8),
+                        Text(
+                          'Your Personal Summary',
+                          style: TextStyle(
+                            fontWeight: FontWeight.w600,
+                            color: Colors.blue.shade800,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceAround,
+                          children: [
+                            if (myPayments.isNotEmpty)
+                              _buildSummaryItem(
+                                'You Pay',
+                                _formatCents(myPayments.fold<int>(0, (sum, s) => sum + s.amount)),
+                                Icons.arrow_upward,
+                                Colors.red.shade600,
+                              ),
+                            if (paymentsToMe.isNotEmpty)
+                              _buildSummaryItem(
+                                'You Receive',
+                                _formatCents(paymentsToMe.fold<int>(0, (sum, s) => sum + s.amount)),
+                                Icons.arrow_downward,
+                                Colors.green.shade600,
+                              ),
+                          ],
+                        ),
+                      ],
+                    ],
                   ),
                 ),
               ],
@@ -2518,10 +3684,54 @@ class _SettlementBottomSheet extends StatelessWidget {
               itemCount: settlements.length,
               itemBuilder: (context, index) {
                 final settlement = settlements[index];
-                return _buildQuickSettlementCard(context, settlement);
+                return _buildEnhancedSettlementCard(context, settlement, currentUserId);
               },
             ),
           ),
+          
+          // Bottom actions for group creator
+          if (isGroupCreator) ...[
+            Padding(
+              padding: const EdgeInsets.all(24),
+              child: Column(
+                children: [
+                  const Divider(),
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      Icon(Icons.admin_panel_settings, 
+                           color: Colors.amber.shade700, size: 20),
+                      const SizedBox(width: 8),
+                      Text(
+                        'Group Creator Options',
+                        style: TextStyle(
+                          fontWeight: FontWeight.w600,
+                          color: Colors.amber.shade700,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton.icon(
+                      onPressed: () {
+                        Navigator.of(context).pop();
+                        _sendSettlementReminders(context, group);
+                      },
+                      icon: const Icon(Icons.notifications, size: 18),
+                      label: const Text('Send Gentle Reminders'),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: Colors.amber.shade700,
+                        side: BorderSide(color: Colors.amber.shade300),
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
           
           // Bottom padding
           const SizedBox(height: 24),
@@ -2529,19 +3739,55 @@ class _SettlementBottomSheet extends StatelessWidget {
       ),
     );
   }
-  
-  Widget _buildQuickSettlementCard(BuildContext context, SettlementInfo settlement) {
+
+  Widget _buildSummaryItem(String label, String value, IconData icon, Color color) {
+    return Column(
+      children: [
+        Icon(icon, color: color, size: 20),
+        const SizedBox(height: 4),
+        Text(
+          value,
+          style: TextStyle(
+            fontSize: 16,
+            fontWeight: FontWeight.bold,
+            color: color,
+          ),
+        ),
+        Text(
+          label,
+          style: TextStyle(
+            fontSize: 12,
+            color: Colors.grey.shade600,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildEnhancedSettlementCard(BuildContext context, SettlementInfo settlement, String currentUserId) {
     final debtorPhone = _getUserPhoneNumber(settlement.debtorId);
     final creditorPhone = _getUserPhoneNumber(settlement.creditorId);
     final canUseSwish = debtorPhone != null && creditorPhone != null;
+    final isMyPayment = settlement.debtorId == currentUserId;
+    final isPaymentToMe = settlement.creditorId == currentUserId;
     
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: Colors.grey.shade50,
+        color: isMyPayment 
+            ? Colors.orange.shade50 
+            : isPaymentToMe 
+                ? Colors.green.shade50 
+                : Colors.grey.shade50,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.grey.shade200),
+        border: Border.all(
+          color: isMyPayment 
+              ? Colors.orange.shade200 
+              : isPaymentToMe 
+                  ? Colors.green.shade200 
+                  : Colors.grey.shade200,
+        ),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -2565,85 +3811,341 @@ class _SettlementBottomSheet extends StatelessWidget {
                       style: TextStyle(
                         fontSize: 18,
                         fontWeight: FontWeight.bold,
-                        color: const Color(0xFF1B4F72),
+                        color: isMyPayment 
+                            ? Colors.orange.shade800 
+                            : isPaymentToMe 
+                                ? Colors.green.shade800 
+                                : const Color(0xFF1B4F72),
                       ),
                     ),
                   ],
                 ),
               ),
+              if (isMyPayment)
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: Colors.orange.shade200,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Text(
+                    'YOU PAY',
+                    style: TextStyle(
+                      fontSize: 10,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.orange.shade800,
+                    ),
+                  ),
+                )
+              else if (isPaymentToMe)
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: Colors.green.shade200,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Text(
+                    'TO YOU',
+                    style: TextStyle(
+                      fontSize: 10,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.green.shade800,
+                    ),
+                  ),
+                ),
             ],
           ),
           const SizedBox(height: 12),
-          if (canUseSwish && settlement.debtorId == 'dev_user_123') // Only show when you owe money
+          
+          // Action buttons - show different options based on relationship to payment
+          if (isMyPayment) ...[
+            // User needs to pay
+            Row(
+              children: [
+                if (canUseSwish) ...[
+                  Expanded(
+                    child: ElevatedButton.icon(
+                      onPressed: () {
+                        Navigator.of(context).pop();
+                        _handleSwishPaymentFromCard(context, settlement);
+                      },
+                      icon: const Icon(Icons.payment, size: 18),
+                      label: const Text('Pay with Swish'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF1B4F72),
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 10),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                ],
+                Expanded(
+                  child: ElevatedButton.icon(
+                    onPressed: () {
+                      Navigator.of(context).pop();
+                      _showSettlementGames(context, settlement);
+                    },
+                    icon: const Icon(Icons.casino, size: 18),
+                    label: const Text('Play Game'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF7C3AED),
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 10),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ] else if (isPaymentToMe) ...[
+            // Payment is coming to user
+            Text(
+              'Waiting for payment from ${_getUserDisplayName(settlement.debtorId)}',
+              style: TextStyle(
+                color: Colors.green.shade700,
+                fontStyle: FontStyle.italic,
+              ),
+            ),
+          ] else ...[
+            // Third party payment
+            Text(
+              'Between other group members',
+              style: TextStyle(
+                color: Colors.grey.shade600,
+                fontStyle: FontStyle.italic,
+              ),
+            ),
+          ],
+          
+          // Universal mark as paid option (visible to payer or receiver)
+          if (isMyPayment || isPaymentToMe) ...[
+            const SizedBox(height: 8),
             SizedBox(
               width: double.infinity,
-              child: ElevatedButton.icon(
+              child: OutlinedButton.icon(
                 onPressed: () {
                   Navigator.of(context).pop();
-                  _handleSwishPaymentFromCard(context, settlement);
+                  _showMarkAsSettledDialog(context, settlement);
                 },
-                icon: Icon(Icons.payment, size: 18),
-                label: Text('Pay with Swish'),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFF1B4F72),
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(vertical: 12),
+                icon: const Icon(Icons.check, size: 18),
+                label: Text(isMyPayment ? 'Mark as Sent' : 'Confirm Received'),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: isMyPayment ? Colors.orange.shade700 : Colors.green.shade700,
+                  side: BorderSide(
+                    color: isMyPayment ? Colors.orange.shade300 : Colors.green.shade300,
+                  ),
+                  padding: const EdgeInsets.symmetric(vertical: 10),
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(8),
                   ),
                 ),
               ),
-            )
-          else
-            Text(
-              'Phone numbers needed for Swish payments',
-              style: TextStyle(
-                fontSize: 12,
-                color: Colors.grey.shade600,
-                fontStyle: FontStyle.italic,
-              ),
             ),
-          const SizedBox(height: 8),
-          // Games button for fun settlement
-          SizedBox(
-            width: double.infinity,
-            child: ElevatedButton.icon(
-              onPressed: () {
-                Navigator.of(context).pop();
-                _showSettlementGames(context, settlement);
-              },
-              icon: Icon(Icons.casino, size: 18),
-              label: Text('Play Game to Decide'),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF7C3AED),
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(vertical: 12),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(8),
+          ],
+          
+          if (!canUseSwish && isMyPayment)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Text(
+                'Phone numbers needed for Swish payments',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: Colors.grey.shade600,
+                  fontStyle: FontStyle.italic,
                 ),
               ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  void _sendSettlementReminders(BuildContext context, Group group) {
+    // This would trigger push notifications to group members
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Row(
+          children: [
+            const Icon(Icons.notifications, color: Colors.white, size: 20),
+            const SizedBox(width: 8),
+            const Expanded(
+              child: Text('Gentle reminders sent to group members'),
+            ),
+          ],
+        ),
+        backgroundColor: Colors.amber.shade600,
+      ),
+    );
+  }
+
+  void _showMarkAsSettledDialog(BuildContext context, SettlementInfo settlement) {
+    final currentUserId = fb.FirebaseAuth.instance.currentUser?.uid ?? 'dev_user_123';
+    final isMyPayment = settlement.debtorId == currentUserId;
+    
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(isMyPayment ? 'Confirm Payment Sent' : 'Confirm Payment Received'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              isMyPayment 
+                  ? 'Have you sent the payment?' 
+                  : 'Have you received the payment?',
+              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              '${_getUserDisplayName(settlement.debtorId)} → ${_getUserDisplayName(settlement.creditorId)}',
+              style: TextStyle(color: Colors.grey.shade600),
+            ),
+            Text(
+              _formatCents(settlement.amount),
+              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.of(ctx).pop();
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text(
+                    isMyPayment 
+                        ? 'Payment marked as sent to ${_getUserDisplayName(settlement.creditorId)}'
+                        : 'Payment confirmed as received from ${_getUserDisplayName(settlement.debtorId)}',
+                  ),
+                  backgroundColor: Colors.green,
+                ),
+              );
+            },
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
+            child: Text(
+              isMyPayment ? 'Confirm Sent' : 'Confirm Received',
+              style: const TextStyle(color: Colors.white),
             ),
           ),
         ],
       ),
     );
   }
-  
+
+  String _formatCents(int cents) {
+    final double amount = cents / 100.0;
+    return '\$${amount.toStringAsFixed(2)}';
+  }
+
+  String _getUserDisplayName(String userId) {
+    if (userId == 'dev_user_123') return 'You';
+    if (userId == 'developer_user') return 'Developer';
+    return 'User ${userId.substring(0, 8)}';
+  }
+
+  String? _getUserPhoneNumber(String userId) {
+    if (userId == 'dev_user_123') return '+46701234567';
+    if (userId == 'developer_user') return '+46709876543';
+    return null;
+  }
+
   Future<void> _handleSwishPaymentFromCard(BuildContext context, SettlementInfo settlement) async {
-    // Only handle outgoing payments (when you owe money)
     final targetPhone = _getUserPhoneNumber(settlement.creditorId);
-    
     if (targetPhone == null) return;
     
     final message = 'Expense settlement - ${_getUserDisplayName(settlement.debtorId)} to ${_getUserDisplayName(settlement.creditorId)}';
     
-    // Show Swish payment dialog
-    await _showSwishPaymentDialog(
-      context: context,
-      targetPhone: targetPhone,
+    // Track this payment for return detection
+    final pendingPayment = PendingSwishPayment(
+      id: '${settlement.debtorId}_${settlement.creditorId}_${DateTime.now().millisecondsSinceEpoch}',
+      debtorId: settlement.debtorId,
+      creditorId: settlement.creditorId,
       amountCents: settlement.amount,
-      message: message,
-      isOutgoingPayment: true, // Always true now
+      groupId: group.id,
+      timestamp: DateTime.now(),
+    );
+    
+    SwishReturnDetector().trackSwishLaunch(pendingPayment);
+    
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Swish Payment'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text('Opening Swish to send ${_formatCents(settlement.amount)} to $targetPhone'),
+            const SizedBox(height: 16),
+            Text('Message: $message'),
+            const SizedBox(height: 16),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.blue.shade50,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.blue.shade200),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.info, color: Colors.blue.shade600, size: 20),
+                  const SizedBox(width: 8),
+                  const Expanded(
+                    child: Text(
+                      'We\'ll ask you to confirm when you return to the app!',
+                      style: TextStyle(fontSize: 12),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.of(ctx).pop();
+              // Clear the tracked payment since user cancelled
+              SwishReturnDetector().clearPayment(pendingPayment.id);
+            },
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.of(ctx).pop();
+              // In a real app, this would launch Swish
+              _launchSwishPayment('swish://payment?phone=$targetPhone&amount=${settlement.amount / 100}&message=${Uri.encodeComponent(message)}');
+            },
+            child: const Text('Open Swish'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showSettlementGames(BuildContext context, SettlementInfo settlement) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Settlement Games'),
+        content: const Text('Settlement games would open here!'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -3971,9 +5473,23 @@ class GroupAnalysisScreen extends ConsumerWidget {
   
   Widget _buildOverviewSection(BuildContext context, Group group, List<Expense> expenses) {
     final totalAmount = expenses.fold<int>(0, (sum, expense) => sum + expense.amountCents);
-    final totalExpenses = expenses.length;
     final activeMembersCount = group.memberUserIds.length;
     final avgPerPerson = activeMembersCount > 0 ? totalAmount / activeMembersCount : 0;
+    
+    // Calculate settlements for more useful metrics
+    final settlements = _calculateGroupSettlementsDetailed(group, expenses);
+    final pendingSettlements = settlements.length;
+    
+    // Calculate current user's balance
+    final currentUserId = fb.FirebaseAuth.instance.currentUser?.uid ?? 'dev_user_123';
+    int userBalance = 0;
+    for (final settlement in settlements) {
+      if (settlement.debtorId == currentUserId) {
+        userBalance -= settlement.amount; // User owes money
+      } else if (settlement.creditorId == currentUserId) {
+        userBalance += settlement.amount; // User is owed money
+      }
+    }
     
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -4008,10 +5524,10 @@ class GroupAnalysisScreen extends ConsumerWidget {
             Expanded(
               child: _buildOverviewCard(
                 context,
-                'Total Expenses',
-                totalExpenses.toString(),
-                Icons.receipt_long,
-                Colors.blue,
+                'Pending Settlements',
+                pendingSettlements.toString(),
+                Icons.account_balance_wallet,
+                Colors.orange,
               ),
             ),
           ],
@@ -4022,10 +5538,22 @@ class GroupAnalysisScreen extends ConsumerWidget {
             Expanded(
               child: _buildOverviewCard(
                 context,
-                'Active Members',
-                activeMembersCount.toString(),
-                Icons.people,
-                Colors.orange,
+                'Your Balance',
+                userBalance == 0 
+                  ? 'Even' 
+                  : userBalance > 0 
+                    ? '+${_formatCents(userBalance)}' 
+                    : _formatCents(userBalance),
+                userBalance == 0 
+                  ? Icons.check_circle 
+                  : userBalance > 0 
+                    ? Icons.trending_up 
+                    : Icons.trending_down,
+                userBalance == 0 
+                  ? Colors.green 
+                  : userBalance > 0 
+                    ? Colors.blue 
+                    : Colors.red,
               ),
             ),
             const SizedBox(width: 12),
@@ -4269,27 +5797,37 @@ class GroupAnalysisScreen extends ConsumerWidget {
             width: double.infinity,
             padding: const EdgeInsets.all(32),
             decoration: BoxDecoration(
-              color: Colors.grey.shade50,
+              color: Theme.of(context).colorScheme.surfaceContainerLowest,
               borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: Colors.grey.shade200),
+              border: Border.all(
+                color: Theme.of(context).colorScheme.outline.withOpacity(0.4),
+                width: 1.5,
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: Theme.of(context).colorScheme.shadow.withOpacity(0.06),
+                  blurRadius: 8,
+                  offset: const Offset(0, 2),
+                ),
+              ],
             ),
             child: Column(
               children: [
-                Icon(Icons.receipt_long, size: 48, color: Colors.grey.shade400),
+                Icon(Icons.receipt_long, size: 48, color: Theme.of(context).colorScheme.onSurfaceVariant),
                 const SizedBox(height: 16),
                 Text(
                   'No expenses yet',
                   style: TextStyle(
                     fontSize: 18,
                     fontWeight: FontWeight.w600,
-                    color: Colors.grey.shade600,
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
                   ),
                 ),
                 const SizedBox(height: 8),
                 Text(
                   'Start adding expenses to see detailed analysis',
                   style: TextStyle(
-                    color: Colors.grey.shade500,
+                    color: Theme.of(context).colorScheme.onSurfaceVariant.withOpacity(0.7),
                   ),
                 ),
               ],
@@ -4327,13 +5865,16 @@ class GroupAnalysisScreen extends ConsumerWidget {
       margin: const EdgeInsets.only(bottom: 16),
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surface,
+        color: Theme.of(context).colorScheme.surfaceContainerLowest,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.grey.shade200),
+        border: Border.all(
+          color: Theme.of(context).colorScheme.outline.withOpacity(0.4),
+          width: 1.5,
+        ),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.05),
-            blurRadius: 10,
+            color: Theme.of(context).colorScheme.shadow.withOpacity(0.08),
+            blurRadius: 12,
             offset: const Offset(0, 2),
           ),
         ],
@@ -4349,16 +5890,17 @@ class GroupAnalysisScreen extends ConsumerWidget {
                   children: [
                     Text(
                       expense.description,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 18,
                         fontWeight: FontWeight.bold,
+                        color: Theme.of(context).colorScheme.onSurface,
                       ),
                     ),
                     const SizedBox(height: 4),
                     Text(
                       'Paid by ${_getUserDisplayName(expense.paidByUserId)} • ${_formatDate(expense.createdAtMs)}',
                       style: TextStyle(
-                        color: Colors.grey.shade600,
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
                         fontSize: 14,
                       ),
                     ),
@@ -4366,15 +5908,28 @@ class GroupAnalysisScreen extends ConsumerWidget {
                 ),
               ),
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                 decoration: BoxDecoration(
                   gradient: LinearGradient(
                     colors: [
                       Theme.of(context).colorScheme.primary,
-                      Theme.of(context).colorScheme.primary.withOpacity(0.8),
+                      Theme.of(context).colorScheme.primary.withOpacity(0.85),
                     ],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
                   ),
-                  borderRadius: BorderRadius.circular(20),
+                  borderRadius: BorderRadius.circular(24),
+                  border: Border.all(
+                    color: Theme.of(context).colorScheme.primary.withOpacity(0.3),
+                    width: 1,
+                  ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Theme.of(context).colorScheme.primary.withOpacity(0.25),
+                      blurRadius: 8,
+                      offset: const Offset(0, 2),
+                    ),
+                  ],
                 ),
                 child: Text(
                   _formatCents(expense.amountCents),
@@ -4391,17 +5946,22 @@ class GroupAnalysisScreen extends ConsumerWidget {
           Container(
             padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(
-              color: Colors.grey.shade50,
+              color: Theme.of(context).colorScheme.surfaceContainerHigh,
               borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: Theme.of(context).colorScheme.outline.withOpacity(0.3),
+                width: 1,
+              ),
             ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
                   'Split Details (${_getSplitModeText(expense.splitMode)})',
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 14,
                     fontWeight: FontWeight.w600,
+                    color: Theme.of(context).colorScheme.onSurface,
                   ),
                 ),
                 const SizedBox(height: 12),
@@ -4424,11 +5984,15 @@ class GroupAnalysisScreen extends ConsumerWidget {
         children: [
           CircleAvatar(
             radius: 12,
-            backgroundColor: isPayer ? Colors.green.shade200 : Colors.grey.shade300,
+            backgroundColor: isPayer 
+              ? Theme.of(context).colorScheme.primaryContainer
+              : Theme.of(context).colorScheme.surfaceContainerHighest,
             child: Text(
               _getUserDisplayName(userId)[0].toUpperCase(),
               style: TextStyle(
-                color: isPayer ? Colors.green.shade800 : Colors.grey.shade700,
+                color: isPayer 
+                  ? Theme.of(context).colorScheme.onPrimaryContainer
+                  : Theme.of(context).colorScheme.onSurfaceVariant,
                 fontWeight: FontWeight.bold,
                 fontSize: 10,
               ),
@@ -4438,29 +6002,45 @@ class GroupAnalysisScreen extends ConsumerWidget {
           Expanded(
             child: Text(
               _getUserDisplayName(userId),
-              style: const TextStyle(fontSize: 14),
+              style: TextStyle(
+                fontSize: 14,
+                color: Theme.of(context).colorScheme.onSurface,
+              ),
             ),
           ),
           Text(
             _formatCents(owedAmount),
             style: TextStyle(
               fontWeight: FontWeight.w600,
-              color: isPayer ? Colors.green.shade700 : Colors.grey.shade700,
+              color: isPayer 
+                ? Theme.of(context).colorScheme.primary
+                : Theme.of(context).colorScheme.onSurfaceVariant,
               fontSize: 14,
             ),
           ),
           if (isPayer)
             Container(
               margin: const EdgeInsets.only(left: 8),
-              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
               decoration: BoxDecoration(
-                color: Colors.green.shade100,
+                color: Theme.of(context).colorScheme.primaryContainer,
                 borderRadius: BorderRadius.circular(8),
+                border: Border.all(
+                  color: Theme.of(context).colorScheme.primary.withOpacity(0.3),
+                  width: 1,
+                ),
+                boxShadow: [
+                  BoxShadow(
+                    color: Theme.of(context).colorScheme.primary.withOpacity(0.15),
+                    blurRadius: 4,
+                    offset: const Offset(0, 1),
+                  ),
+                ],
               ),
               child: Text(
                 'PAID',
                 style: TextStyle(
-                  color: Colors.green.shade800,
+                  color: Theme.of(context).colorScheme.onPrimaryContainer,
                   fontSize: 10,
                   fontWeight: FontWeight.bold,
                 ),
@@ -4679,15 +6259,91 @@ class GroupAnalysisScreen extends ConsumerWidget {
   }
   
   void _markAsSettled(BuildContext context, SettlementInfo settlement) {
-    // In a real app, this would update the database to mark the settlement as completed
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          'Marked payment from ${_getUserDisplayName(settlement.debtorId)} to ${_getUserDisplayName(settlement.creditorId)} as completed',
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Confirm Payment'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Mark payment as completed?',
+              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              '${_getUserDisplayName(settlement.debtorId)} → ${_getUserDisplayName(settlement.creditorId)}',
+              style: TextStyle(color: Colors.grey.shade600),
+            ),
+            Text(
+              _formatCents(settlement.amount),
+              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 16),
+            Text(
+              'Who is confirming this payment?',
+              style: TextStyle(
+                fontSize: 14,
+                color: Colors.grey.shade700,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ],
         ),
-        backgroundColor: Colors.green,
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.of(ctx).pop();
+              // For now, just show confirmation - in real app this would update database
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text(
+                    'Payment marked as completed: ${_getUserDisplayName(settlement.debtorId)} → ${_getUserDisplayName(settlement.creditorId)}',
+                  ),
+                  backgroundColor: Colors.green,
+                  action: SnackBarAction(
+                    label: 'UNDO',
+                    textColor: Colors.white,
+                    onPressed: () {
+                      // Future: Add undo functionality
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('Payment unmarked'),
+                          backgroundColor: Colors.orange,
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              );
+            },
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
+            child: const Text('Confirm Payment', style: TextStyle(color: Colors.white)),
+          ),
+        ],
       ),
     );
+  }
+  
+  // Helper function to calculate user's balance in a specific group
+  int _calculateUserBalanceInGroup(Group group, List<Expense> expenses) {
+    final settlements = _calculateGroupSettlementsDetailed(group, expenses);
+    final currentUserId = fb.FirebaseAuth.instance.currentUser?.uid ?? 'dev_user_123';
+    
+    int userBalance = 0;
+    for (final settlement in settlements) {
+      if (settlement.debtorId == currentUserId) {
+        userBalance -= settlement.amount; // User owes money (negative)
+      } else if (settlement.creditorId == currentUserId) {
+        userBalance += settlement.amount; // User is owed money (positive)
+      }
+    }
+    return userBalance;
   }
   
   List<SettlementInfo> _calculateGroupSettlementsDetailed(Group group, List<Expense> expenses) {
@@ -5476,11 +7132,11 @@ class _SettlementGamesDialogState extends State<_SettlementGamesDialog> with Tic
   
   String _gameResult = '';
   bool _isPlaying = false;
+  bool _currentUserWins = false; // Track if current user wins for confetti
   String _currentCard1 = '';
   String _currentCard2 = '';
   String _currentDice1 = '⚀';
   String _currentDice2 = '⚀';
-  double _wheelAngle = 0.0;
 
   @override
   void initState() {
@@ -5501,7 +7157,7 @@ class _SettlementGamesDialogState extends State<_SettlementGamesDialog> with Tic
     );
     
     _wheelSpinController = AnimationController(
-      duration: const Duration(milliseconds: 3000),
+      duration: const Duration(milliseconds: 6000), // Longer for more suspense
       vsync: this,
     );
     
@@ -5518,7 +7174,7 @@ class _SettlementGamesDialogState extends State<_SettlementGamesDialog> with Tic
       CurvedAnimation(parent: _diceRollController, curve: Curves.bounceOut),
     );
     
-    _wheelRotationAnimation = Tween<double>(begin: 0.0, end: 8.0).animate(
+    _wheelRotationAnimation = Tween<double>(begin: 0.0, end: 15.0).animate( // More rotations
       CurvedAnimation(parent: _wheelSpinController, curve: Curves.easeOutCubic),
     );
     
@@ -5541,179 +7197,379 @@ class _SettlementGamesDialogState extends State<_SettlementGamesDialog> with Tic
   Widget build(BuildContext context) {
     return Stack(
       children: [
-        AlertDialog(
-          title: Row(
-            children: [
-              Icon(Icons.casino, color: const Color(0xFF7C3AED)),
-              const SizedBox(width: 8),
-              Text('Settlement Games'),
-            ],
-          ),
-          content: SizedBox(
-            width: 300,
+        Dialog(
+          backgroundColor: Colors.transparent,
+          child: Container(
+            constraints: const BoxConstraints(maxWidth: 420, maxHeight: 700),
+            decoration: BoxDecoration(
+              color: Theme.of(context).colorScheme.surface,
+              borderRadius: BorderRadius.circular(20),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.1),
+                  blurRadius: 20,
+                  offset: const Offset(0, 10),
+                ),
+              ],
+            ),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Text(
-                  '${_getUserDisplayName(widget.settlement.debtorId)} owes ${_getUserDisplayName(widget.settlement.creditorId)} ${_formatCents(widget.settlement.amount)}',
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w500),
-                ),
-                const SizedBox(height: 16),
-                Text(
-                  'Choose a game to decide who pays!',
-                  style: TextStyle(color: Colors.grey.shade600),
-                ),
-                const SizedBox(height: 20),
-                
-                // Animated Game Visuals
+                // Header
                 Container(
-                  height: 150,
-                  width: double.infinity,
+                  padding: const EdgeInsets.all(20),
                   decoration: BoxDecoration(
                     gradient: LinearGradient(
                       begin: Alignment.topLeft,
                       end: Alignment.bottomRight,
                       colors: [
-                        const Color(0xFF7C3AED).withOpacity(0.05),
-                        const Color(0xFF06B6D4).withOpacity(0.05),
+                        const Color(0xFF7C3AED).withOpacity(0.1),
+                        const Color(0xFF06B6D4).withOpacity(0.1),
                       ],
                     ),
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(
-                      color: const Color(0xFF7C3AED).withOpacity(0.2),
-                      width: 1,
+                    borderRadius: const BorderRadius.only(
+                      topLeft: Radius.circular(20),
+                      topRight: Radius.circular(20),
                     ),
                   ),
-                  child: Center(
-                    child: _buildGameAnimation(),
+                  child: Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF7C3AED).withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: const Icon(
+                          Icons.casino,
+                          color: Color(0xFF7C3AED),
+                          size: 20,
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              'Settlement Games',
+                              style: TextStyle(
+                                fontSize: 18,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              'Play a game to decide who pays!',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: Colors.grey.shade600,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
                   ),
                 ),
                 
-                // Game Results
-                if (_gameResult.isNotEmpty) ...[
-                  const SizedBox(height: 16),
-                  AnimatedBuilder(
-                    animation: _confettiAnimation,
-                    builder: (context, child) {
-                      return Transform.scale(
-                        scale: 0.8 + (_confettiAnimation.value * 0.2),
-                        child: Container(
-                          padding: const EdgeInsets.all(16),
+                // Content - Make this scrollable
+                Flexible(
+                  child: SingleChildScrollView(
+                    padding: const EdgeInsets.all(20),
+                    child: Column(
+                      children: [
+                        // Settlement info - more compact
+                        Container(
+                          padding: const EdgeInsets.all(12),
                           decoration: BoxDecoration(
-                            color: const Color(0xFF7C3AED).withOpacity(0.1),
+                            color: Theme.of(context).brightness == Brightness.dark
+                                ? Colors.grey.shade800
+                                : Colors.grey.shade50,
                             borderRadius: BorderRadius.circular(12),
-                            border: Border.all(color: const Color(0xFF7C3AED).withOpacity(0.3)),
+                            border: Border.all(
+                              color: Theme.of(context).brightness == Brightness.dark
+                                  ? Colors.grey.shade600
+                                  : Colors.grey.shade200,
+                            ),
                           ),
-                          child: Column(
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
                             children: [
-                              AnimatedBuilder(
-                                animation: _confettiAnimation,
-                                builder: (context, child) {
-                                  return Transform.rotate(
-                                    angle: _confettiAnimation.value * 2 * 3.14159,
-                                    child: Icon(
-                                      Icons.celebration,
-                                      color: const Color(0xFF7C3AED),
-                                      size: 32,
+                              // Debtor
+                              Expanded(
+                                child: Column(
+                                  children: [
+                                    CircleAvatar(
+                                      radius: 20,
+                                      backgroundColor: _getUserColor(widget.settlement.debtorId),
+                                      child: Text(
+                                        _getUserInitials(widget.settlement.debtorId),
+                                        style: const TextStyle(
+                                          color: Colors.white,
+                                          fontSize: 14,
+                                          fontWeight: FontWeight.w600,
+                                        ),
+                                      ),
                                     ),
-                                  );
-                                },
+                                    const SizedBox(height: 6),
+                                    Text(
+                                      _getUserDisplayName(widget.settlement.debtorId),
+                                      style: const TextStyle(
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w500,
+                                      ),
+                                      textAlign: TextAlign.center,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ],
+                                ),
                               ),
-                              const SizedBox(height: 8),
-                              Text(
-                                _gameResult,
-                                textAlign: TextAlign.center,
-                                style: const TextStyle(
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.bold,
-                                  color: Color(0xFF7C3AED),
+                              // VS and amount
+                              Expanded(
+                                child: Column(
+                                  children: [
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                                      decoration: BoxDecoration(
+                                        color: const Color(0xFF7C3AED),
+                                        borderRadius: BorderRadius.circular(16),
+                                      ),
+                                      child: const Text(
+                                        'VS',
+                                        style: TextStyle(
+                                          fontSize: 14,
+                                          fontWeight: FontWeight.bold,
+                                          color: Colors.white,
+                                        ),
+                                      ),
+                                    ),
+                                    const SizedBox(height: 6),
+                                    Text(
+                                      _formatCents(widget.settlement.amount),
+                                      style: const TextStyle(
+                                        fontSize: 16,
+                                        fontWeight: FontWeight.bold,
+                                        color: Color(0xFF7C3AED),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              // Creditor
+                              Expanded(
+                                child: Column(
+                                  children: [
+                                    CircleAvatar(
+                                      radius: 20,
+                                      backgroundColor: _getUserColor(widget.settlement.creditorId),
+                                      child: Text(
+                                        _getUserInitials(widget.settlement.creditorId),
+                                        style: const TextStyle(
+                                          color: Colors.white,
+                                          fontSize: 14,
+                                          fontWeight: FontWeight.w600,
+                                        ),
+                                      ),
+                                    ),
+                                    const SizedBox(height: 6),
+                                    Text(
+                                      _getUserDisplayName(widget.settlement.creditorId),
+                                      style: const TextStyle(
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w500,
+                                      ),
+                                      textAlign: TextAlign.center,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ],
                                 ),
                               ),
                             ],
                           ),
                         ),
-                      );
-                    },
-                  ),
-                  const SizedBox(height: 20),
-                ],
-                
-                // Game buttons - only show when no result yet
-                if (_gameResult.isEmpty) ...[
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: [
-                      _gameButton('🃏 Card Draw', () => _playCardGame()),
-                      _gameButton('🥤 Short Straw', () => _playStrawGame()),
-                      _gameButton('🎲 Dice Roll', () => _playDiceGame()),
-                      _gameButton('🎯 Spin Wheel', () => _playWheelGame()),
-                      _gameButton('✂️ Rock Paper Scissors', () => _playRPSGame()),
-                    ],
-                  ),
-                ] else ...[
-                  // Show final result with action buttons
-                  const SizedBox(height: 16),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                    children: [
-                      Expanded(
-                        child: ElevatedButton.icon(
-                          onPressed: () {
-                            setState(() {
-                              _gameResult = '';
-                              _isPlaying = false;
-                              _currentCard1 = '';
-                              _currentCard2 = '';
-                              _currentDice1 = '⚀';
-                              _currentDice2 = '⚀';
-                            });
-                            _confettiController.reset();
-                          },
-                          icon: const Icon(Icons.refresh),
-                          label: const Text('Play Again'),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.grey.shade600,
-                            foregroundColor: Colors.white,
+                        const SizedBox(height: 16),
+                        
+                        // Game area - more compact
+                        Container(
+                          height: 160,
+                          width: double.infinity,
+                          decoration: BoxDecoration(
+                            gradient: LinearGradient(
+                              begin: Alignment.topLeft,
+                              end: Alignment.bottomRight,
+                              colors: [
+                                const Color(0xFF7C3AED).withOpacity(0.05),
+                                const Color(0xFF06B6D4).withOpacity(0.05),
+                              ],
+                            ),
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(
+                              color: const Color(0xFF7C3AED).withOpacity(0.2),
+                              width: 1,
+                            ),
+                          ),
+                          child: Center(
+                            child: _buildGameAnimation(),
                           ),
                         ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: ElevatedButton.icon(
-                          onPressed: () {
-                            Navigator.of(context).pop();
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(
-                                content: Text('Game result accepted: $_gameResult'),
-                                backgroundColor: const Color(0xFF7C3AED),
+                        
+                        const SizedBox(height: 16),
+                        
+                        // Game results or buttons
+                        if (_gameResult.isNotEmpty && !_isPlaying) ...[
+                          Container(
+                            padding: const EdgeInsets.all(16),
+                            decoration: BoxDecoration(
+                              gradient: LinearGradient(
+                                colors: _currentUserWins
+                                    ? [
+                                        Colors.green.withOpacity(0.1),
+                                        Colors.green.withOpacity(0.05),
+                                      ]
+                                    : [
+                                        const Color(0xFF7C3AED).withOpacity(0.1),
+                                        const Color(0xFF06B6D4).withOpacity(0.05),
+                                      ],
                               ),
-                            );
-                          },
-                          icon: const Icon(Icons.check),
-                          label: const Text('Accept'),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: const Color(0xFF7C3AED),
-                            foregroundColor: Colors.white,
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(
+                                color: _currentUserWins
+                                    ? Colors.green.withOpacity(0.3)
+                                    : const Color(0xFF7C3AED).withOpacity(0.3),
+                              ),
+                            ),
+                            child: Column(
+                              children: [
+                                Icon(
+                                  _currentUserWins ? Icons.celebration : Icons.emoji_events,
+                                  size: 28,
+                                  color: _currentUserWins ? Colors.green : const Color(0xFF7C3AED),
+                                ),
+                                const SizedBox(height: 8),
+                                Text(
+                                  _currentUserWins ? '🎉 You Win!' : 'Game Result',
+                                  style: TextStyle(
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.bold,
+                                    color: _currentUserWins ? Colors.green : const Color(0xFF7C3AED),
+                                  ),
+                                ),
+                                const SizedBox(height: 6),
+                                Text(
+                                  _gameResult,
+                                  textAlign: TextAlign.center,
+                                  style: const TextStyle(fontSize: 13),
+                                ),
+                              ],
+                            ),
                           ),
-                        ),
+                          const SizedBox(height: 16),
+                          // Action buttons
+                          Row(
+                            children: [
+                              Expanded(
+                                child: OutlinedButton.icon(
+                                  onPressed: () {
+                                    setState(() {
+                                      _gameResult = '';
+                                      _isPlaying = false;
+                                      _currentUserWins = false;
+                                      _currentCard1 = '';
+                                      _currentCard2 = '';
+                                      _currentDice1 = '⚀';
+                                      _currentDice2 = '⚀';
+                                    });
+                                    _confettiController.reset();
+                                  },
+                                  icon: const Icon(Icons.refresh, size: 16),
+                                  label: const Text('Play Again', style: TextStyle(fontSize: 12)),
+                                  style: OutlinedButton.styleFrom(
+                                    padding: const EdgeInsets.symmetric(vertical: 8),
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: ElevatedButton.icon(
+                                  onPressed: () {
+                                    Navigator.of(context).pop();
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(
+                                        content: Text('Game result accepted: $_gameResult'),
+                                        backgroundColor: const Color(0xFF7C3AED),
+                                      ),
+                                    );
+                                  },
+                                  icon: const Icon(Icons.check, size: 16),
+                                  label: const Text('Accept', style: TextStyle(fontSize: 12)),
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: const Color(0xFF7C3AED),
+                                    foregroundColor: Colors.white,
+                                    padding: const EdgeInsets.symmetric(vertical: 8),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ] else if (!_isPlaying) ...[
+                          // Game selection buttons
+                          const Text(
+                            'Choose Your Game',
+                            style: TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+                          Wrap(
+                            spacing: 8,
+                            runSpacing: 8,
+                            alignment: WrapAlignment.center,
+                            children: [
+                              _gameButton('🃏 Card Draw', Icons.style, () => _playCardGame()),
+                              _gameButton('🎲 Dice Roll', Icons.casino, () => _playDiceGame()),
+                              _gameButton('🎯 Spin Wheel', Icons.track_changes, () => _playWheelGame()),
+                              _gameButton('� Coin Flip', Icons.monetization_on, () => _playCoinFlip()),
+                              _gameButton('✂️ Rock Paper Scissors', Icons.back_hand, () => _playRPSGame()),
+                            ],
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                ),
+                
+                // Footer - more compact
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                  decoration: BoxDecoration(
+                    color: Theme.of(context).brightness == Brightness.dark
+                        ? Colors.grey.shade800.withOpacity(0.5)
+                        : Colors.grey.shade50,
+                    borderRadius: const BorderRadius.only(
+                      bottomLeft: Radius.circular(20),
+                      bottomRight: Radius.circular(20),
+                    ),
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: [
+                      TextButton(
+                        onPressed: () => Navigator.of(context).pop(),
+                        child: const Text('Close'),
                       ),
                     ],
                   ),
-                ],
+                ),
               ],
             ),
           ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(),
-              child: const Text('Close'),
-            ),
-          ],
         ),
-        // Confetti overlay
-        if (_gameResult.isNotEmpty)
+        // Confetti overlay - only show when current user wins
+        if (_currentUserWins && _gameResult.isNotEmpty)
           AnimatedBuilder(
             animation: _confettiAnimation,
             builder: (context, child) {
@@ -5745,7 +7601,7 @@ class _SettlementGamesDialogState extends State<_SettlementGamesDialog> with Tic
                   angle: value * 2 * 3.14159,
                   child: Icon(
                     Icons.casino,
-                    size: 64,
+                    size: 48,
                     color: Color.lerp(
                       const Color(0xFF7C3AED).withOpacity(0.3),
                       const Color(0xFF06B6D4).withOpacity(0.7),
@@ -5756,12 +7612,12 @@ class _SettlementGamesDialogState extends State<_SettlementGamesDialog> with Tic
               );
             },
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 8),
           Text(
             'Select a game to begin!',
             style: TextStyle(
               color: const Color(0xFF7C3AED),
-              fontSize: 16,
+              fontSize: 14,
               fontWeight: FontWeight.w500,
             ),
           ),
@@ -5776,21 +7632,23 @@ class _SettlementGamesDialogState extends State<_SettlementGamesDialog> with Tic
           Text(
             'Card Battle!',
             style: TextStyle(
-              fontSize: 18,
+              fontSize: 14,
               fontWeight: FontWeight.bold,
               color: const Color(0xFF7C3AED),
             ),
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 4),
           Text(
             '${_getUserDisplayName(widget.settlement.debtorId)} vs ${_getUserDisplayName(widget.settlement.creditorId)}',
             style: TextStyle(
-              fontSize: 14,
+              fontSize: 11,
               fontWeight: FontWeight.w500,
               color: Colors.grey.shade700,
             ),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: 8),
           Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
@@ -5799,12 +7657,14 @@ class _SettlementGamesDialogState extends State<_SettlementGamesDialog> with Tic
                   Text(
                     _getUserDisplayName(widget.settlement.debtorId),
                     style: TextStyle(
-                      fontSize: 12,
+                      fontSize: 10,
                       fontWeight: FontWeight.bold,
                       color: const Color(0xFF7C3AED),
                     ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                   ),
-                  const SizedBox(height: 8),
+                  const SizedBox(height: 4),
                   AnimatedBuilder(
                     animation: _cardFlipAnimation,
                     builder: (context, child) {
@@ -5819,34 +7679,36 @@ class _SettlementGamesDialogState extends State<_SettlementGamesDialog> with Tic
                   ),
                 ],
               ),
-              const SizedBox(width: 30),
+              const SizedBox(width: 16),
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                 decoration: BoxDecoration(
                   color: const Color(0xFF7C3AED),
-                  borderRadius: BorderRadius.circular(20),
+                  borderRadius: BorderRadius.circular(12),
                 ),
                 child: Text(
                   'VS',
                   style: TextStyle(
-                    fontSize: 20,
+                    fontSize: 12,
                     fontWeight: FontWeight.bold,
                     color: Colors.white,
                   ),
                 ),
               ),
-              const SizedBox(width: 30),
+              const SizedBox(width: 16),
               Column(
                 children: [
                   Text(
                     _getUserDisplayName(widget.settlement.creditorId),
                     style: TextStyle(
-                      fontSize: 12,
+                      fontSize: 10,
                       fontWeight: FontWeight.bold,
                       color: const Color(0xFF7C3AED),
                     ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                   ),
-                  const SizedBox(height: 8),
+                  const SizedBox(height: 4),
                   AnimatedBuilder(
                     animation: _cardFlipAnimation,
                     builder: (context, child) {
@@ -6028,57 +7890,159 @@ class _SettlementGamesDialogState extends State<_SettlementGamesDialog> with Tic
               color: Colors.grey.shade700,
             ),
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: 12),
           AnimatedBuilder(
             animation: _wheelRotationAnimation,
             builder: (context, child) {
               return Transform.rotate(
                 angle: _wheelRotationAnimation.value * 10 * 3.14159,
-                child: Container(
-                  width: 100,
-                  height: 100,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    gradient: SweepGradient(
-                      colors: [
-                        Colors.red,
-                        Colors.orange,
-                        Colors.yellow,
-                        Colors.green,
-                        Colors.blue,
-                        Colors.purple,
-                        Colors.red,
-                      ],
-                    ),
-                    border: Border.all(color: Colors.black, width: 3),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withOpacity(0.3),
-                        blurRadius: 8,
-                        offset: const Offset(0, 4),
+                child: Stack(
+                  alignment: Alignment.center,
+                  children: [
+                    // Main wheel
+                    Container(
+                      width: 80,
+                      height: 80,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        border: Border.all(color: Colors.black, width: 2),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withOpacity(0.2),
+                            blurRadius: 4,
+                            offset: const Offset(0, 2),
+                          ),
+                        ],
                       ),
-                    ],
-                  ),
-                  child: const Center(
-                    child: Text(
-                      '🎯',
-                      style: TextStyle(fontSize: 32),
+                      child: CustomPaint(
+                        painter: WheelPainter(
+                          debtorName: _getUserDisplayName(widget.settlement.debtorId),
+                          creditorName: _getUserDisplayName(widget.settlement.creditorId),
+                        ),
+                      ),
                     ),
-                  ),
+                    // Center circle
+                    Container(
+                      width: 12,
+                      height: 12,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: Colors.black,
+                        border: Border.all(color: Colors.white, width: 1),
+                      ),
+                    ),
+                  ],
                 ),
               );
             },
+          ),
+          const SizedBox(height: 8),
+          // Wheel pointer
+          Container(
+            width: 0,
+            height: 0,
+            decoration: BoxDecoration(
+              border: Border(
+                left: BorderSide(width: 6, color: Colors.transparent),
+                right: BorderSide(width: 6, color: Colors.transparent),
+                bottom: BorderSide(width: 8, color: Colors.red.shade600),
+              ),
+            ),
           ),
         ],
       );
     }
 
-    if (_gameResult.contains('Drawing straws')) {
+    if (_gameResult.contains('The wheel chooses')) {
       return Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
           Text(
-            'Short Straw Challenge!',
+            'Wheel of Fortune!',
+            style: TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.bold,
+              color: const Color(0xFF7C3AED),
+            ),
+          ),
+          const SizedBox(height: 8),
+          // Show final wheel state (stopped at correct position)
+          AnimatedBuilder(
+            animation: _wheelRotationAnimation,
+            builder: (context, child) {
+              return Transform.rotate(
+                angle: _wheelRotationAnimation.value * 2 * 3.14159,
+                child: Stack(
+                  alignment: Alignment.center,
+                  children: [
+                    Container(
+                      width: 80,
+                      height: 80,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        border: Border.all(color: Colors.black, width: 2),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withOpacity(0.2),
+                            blurRadius: 4,
+                            offset: const Offset(0, 2),
+                          ),
+                        ],
+                      ),
+                      child: CustomPaint(
+                        painter: WheelPainter(
+                          debtorName: _getUserDisplayName(widget.settlement.debtorId),
+                          creditorName: _getUserDisplayName(widget.settlement.creditorId),
+                        ),
+                      ),
+                    ),
+                    Container(
+                      width: 12,
+                      height: 12,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: Colors.black,
+                        border: Border.all(color: Colors.white, width: 1),
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            },
+          ),
+          const SizedBox(height: 8),
+          // Wheel pointer
+          Container(
+            width: 0,
+            height: 0,
+            decoration: BoxDecoration(
+              border: Border(
+                left: BorderSide(width: 6, color: Colors.transparent),
+                right: BorderSide(width: 6, color: Colors.transparent),
+                bottom: BorderSide(width: 8, color: Colors.red.shade600),
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          Text(
+            _gameResult,
+            style: TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.bold,
+              color: _currentUserWins ? Colors.green.shade600 : Colors.red.shade600,
+            ),
+            textAlign: TextAlign.center,
+          ),
+        ],
+      );
+    }
+
+    if (_gameResult.contains('Flipping coin') || _gameResult.contains('Heads') || _gameResult.contains('Tails')) {
+      return Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Text(
+            'Coin Flip Challenge!',
             style: TextStyle(
               fontSize: 18,
               fontWeight: FontWeight.bold,
@@ -6087,37 +8051,133 @@ class _SettlementGamesDialogState extends State<_SettlementGamesDialog> with Tic
           ),
           const SizedBox(height: 8),
           Text(
-            '${_getUserDisplayName(widget.settlement.debtorId)} vs ${_getUserDisplayName(widget.settlement.creditorId)}',
+            '${_getUserDisplayName(widget.settlement.creditorId)} calls Heads • ${_getUserDisplayName(widget.settlement.debtorId)} calls Tails',
             style: TextStyle(
-              fontSize: 14,
+              fontSize: 12,
               fontWeight: FontWeight.w500,
               color: Colors.grey.shade700,
             ),
+            textAlign: TextAlign.center,
           ),
           const SizedBox(height: 16),
           Row(
-            mainAxisAlignment: MainAxisAlignment.center,
+            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
             children: [
-              for (int i = 0; i < 5; i++)
-                TweenAnimationBuilder<double>(
-                  duration: Duration(milliseconds: 800 + (i * 150)),
-                  tween: Tween(begin: 0, end: 1),
-                  builder: (context, value, child) {
-                    return Transform.translate(
-                      offset: Offset(0, -value * 15),
+              // Heads player
+              Column(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFFFD700).withOpacity(0.2),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: const Color(0xFFFFD700), width: 1),
+                    ),
+                    child: Text(
+                      _getUserDisplayName(widget.settlement.creditorId),
+                      style: TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.bold,
+                        color: const Color(0xFFB8860B),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'HEADS',
+                    style: TextStyle(
+                      fontSize: 8,
+                      fontWeight: FontWeight.w600,
+                      color: Colors.grey.shade600,
+                    ),
+                  ),
+                ],
+              ),
+              // Coin animation
+              TweenAnimationBuilder<double>(
+                duration: const Duration(milliseconds: 1500),
+                tween: Tween(begin: 0, end: _isPlaying ? 12 : 0),
+                builder: (context, value, child) {
+                  final rotationY = value * 3.14159; // Y-axis rotation for flip effect
+                  final bounce = _isPlaying ? (sin(value * 2) * 10).abs().toDouble() : 0.0;
+                  
+                  return Transform.translate(
+                    offset: Offset(0, -bounce),
+                    child: Transform(
+                      alignment: Alignment.center,
+                      transform: Matrix4.identity()
+                        ..setEntry(3, 2, 0.001) // perspective
+                        ..rotateY(rotationY),
                       child: Container(
-                        margin: const EdgeInsets.symmetric(horizontal: 4),
-                        width: 12,
-                        height: 50 + (i * 8).toDouble(),
+                        width: 50,
+                        height: 50,
                         decoration: BoxDecoration(
-                          color: i == 2 ? Colors.red.shade400 : Colors.orange.shade400,
-                          borderRadius: BorderRadius.circular(6),
-                          border: Border.all(color: Colors.brown, width: 1),
+                          shape: BoxShape.circle,
+                          gradient: LinearGradient(
+                            colors: [
+                              const Color(0xFFFFD700),
+                              const Color(0xFFB8860B),
+                              const Color(0xFFFFD700),
+                            ],
+                            stops: [0.0, 0.5, 1.0],
+                            begin: Alignment.topLeft,
+                            end: Alignment.bottomRight,
+                          ),
+                          border: Border.all(color: const Color(0xFF8B7355), width: 2),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withOpacity(0.3),
+                              blurRadius: 8,
+                              offset: Offset(0, bounce / 4),
+                            ),
+                          ],
+                        ),
+                        child: Center(
+                          child: Text(
+                            // Show H or T based on rotation, with perspective effect
+                            (rotationY % (2 * 3.14159)) < 3.14159 ? 'H' : 'T',
+                            style: TextStyle(
+                              fontSize: 20,
+                              fontWeight: FontWeight.bold,
+                              color: const Color(0xFF8B4513),
+                            ),
+                          ),
                         ),
                       ),
-                    );
-                  },
-                ),
+                    ),
+                  );
+                },
+              ),
+              // Tails player
+              Column(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF8B7355).withOpacity(0.2),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: const Color(0xFF8B7355), width: 1),
+                    ),
+                    child: Text(
+                      _getUserDisplayName(widget.settlement.debtorId),
+                      style: TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.bold,
+                        color: const Color(0xFF5D4E37),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'TAILS',
+                    style: TextStyle(
+                      fontSize: 8,
+                      fontWeight: FontWeight.w600,
+                      color: Colors.grey.shade600,
+                    ),
+                  ),
+                ],
+              ),
             ],
           ),
         ],
@@ -6250,39 +8310,63 @@ class _SettlementGamesDialogState extends State<_SettlementGamesDialog> with Tic
 
   Widget _buildCard(String card) {
     return Container(
-      width: 50,
-      height: 70,
+      width: 36,
+      height: 50,
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: BorderRadius.circular(6),
         border: Border.all(color: Colors.black, width: 1),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withOpacity(0.1),
-            blurRadius: 4,
-            offset: const Offset(2, 2),
+            blurRadius: 2,
+            offset: const Offset(1, 1),
           ),
         ],
       ),
       child: Center(
         child: Text(
           card,
-          style: const TextStyle(fontSize: 24),
+          style: const TextStyle(fontSize: 16),
         ),
       ),
     );
   }
 
-  Widget _gameButton(String label, VoidCallback onPressed) {
-    return ElevatedButton(
-      onPressed: _isPlaying ? null : onPressed,
-      style: ElevatedButton.styleFrom(
-        backgroundColor: const Color(0xFF7C3AED).withOpacity(0.1),
-        foregroundColor: const Color(0xFF7C3AED),
-        side: const BorderSide(color: Color(0xFF7C3AED)),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+  Widget _gameButton(String label, IconData icon, VoidCallback onPressed) {
+    return Container(
+      width: 110,
+      height: 50,
+      child: ElevatedButton(
+        onPressed: _isPlaying ? null : onPressed,
+        style: ElevatedButton.styleFrom(
+          backgroundColor: Theme.of(context).brightness == Brightness.dark
+              ? const Color(0xFF7C3AED).withOpacity(0.15)
+              : const Color(0xFF7C3AED).withOpacity(0.08),
+          foregroundColor: const Color(0xFF7C3AED),
+          side: BorderSide(
+            color: const Color(0xFF7C3AED).withOpacity(0.3),
+            width: 1,
+          ),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+          elevation: 0,
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+        ),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(icon, size: 16),
+            const SizedBox(height: 2),
+            Text(
+              label,
+              style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w500),
+              textAlign: TextAlign.center,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ],
+        ),
       ),
-      child: Text(label),
     );
   }
 
@@ -6292,6 +8376,7 @@ class _SettlementGamesDialogState extends State<_SettlementGamesDialog> with Tic
       _gameResult = 'Drawing cards...';
       _currentCard1 = '🂠';
       _currentCard2 = '🂠';
+      _currentUserWins = false;
     });
 
     // Start card flip animation
@@ -6330,54 +8415,77 @@ class _SettlementGamesDialogState extends State<_SettlementGamesDialog> with Tic
     String winner;
     final debtorName = _getUserDisplayName(widget.settlement.debtorId);
     final creditorName = _getUserDisplayName(widget.settlement.creditorId);
+    const currentUserId = 'dev_user_123'; // In real app, get from auth
+    bool currentUserWins = false;
     
     if (debtorCard > creditorCard) {
       winner = '$creditorName pays! ($creditorName: $creditorCardName vs $debtorName: $debtorCardName)';
+      // Current user wins if they are the debtor (owed money) and the creditor has to pay
+      currentUserWins = (widget.settlement.debtorId == currentUserId);
     } else if (creditorCard > debtorCard) {
       winner = '$debtorName pays! ($debtorName: $debtorCardName vs $creditorName: $creditorCardName)';
+      // Current user wins if they are the creditor (owed money) and the debtor has to pay
+      currentUserWins = (widget.settlement.creditorId == currentUserId);
     } else {
       winner = 'It\'s a tie! Both drew $debtorCardName. Draw again or split the cost!';
+      currentUserWins = false;
     }
 
     setState(() {
       _gameResult = winner;
       _isPlaying = false;
+      _currentUserWins = currentUserWins;
     });
     
-    _confettiController.forward();
+    if (currentUserWins) {
+      _confettiController.forward();
+    }
   }
 
-  void _playStrawGame() async {
+  void _playCoinFlip() async {
     setState(() {
       _isPlaying = true;
-      _gameResult = 'Drawing straws...';
+      _gameResult = 'Flipping coin...';
+      _currentUserWins = false;
     });
 
-    // Simulate straw drawing with visual feedback - slower for suspense
-    for (int i = 0; i < 20; i++) {
-      await Future.delayed(const Duration(milliseconds: 300));
+    // Simulate coin flip with visual feedback
+    for (int i = 0; i < 15; i++) {
+      await Future.delayed(const Duration(milliseconds: 200));
       if (mounted) {
         setState(() {
-          _gameResult = 'Drawing straws...';
+          _gameResult = i.isEven ? 'Heads...' : 'Tails...';
         });
       }
     }
 
     final random = Random();
-    final shortStrawPerson = random.nextBool() ? widget.settlement.debtorId : widget.settlement.creditorId;
-    final shortStrawName = _getUserDisplayName(shortStrawPerson);
-    final otherName = _getUserDisplayName(
-      shortStrawPerson == widget.settlement.debtorId 
-        ? widget.settlement.creditorId 
-        : widget.settlement.debtorId
-    );
+    final isHeads = random.nextBool();
+    const currentUserId = 'dev_user_123'; // In real app, get from auth
+    
+    // Current user calls heads, other person calls tails
+    // If heads wins, current user wins if they're the creditor (gets paid)
+    // If tails wins, current user wins if they're the debtor (doesn't have to pay)
+    bool currentUserWins = false;
+    String result;
+    
+    if (isHeads) {
+      result = 'Heads! ${_getUserDisplayName(widget.settlement.creditorId)} wins and gets paid!';
+      currentUserWins = (widget.settlement.creditorId == currentUserId);
+    } else {
+      result = 'Tails! ${_getUserDisplayName(widget.settlement.debtorId)} wins and doesn\'t have to pay!';
+      currentUserWins = (widget.settlement.debtorId == currentUserId);
+    }
     
     setState(() {
-      _gameResult = '$shortStrawName drew the short straw and pays! ($shortStrawName vs $otherName)';
+      _gameResult = result;
       _isPlaying = false;
+      _currentUserWins = currentUserWins;
     });
     
-    _confettiController.forward();
+    if (currentUserWins) {
+      _confettiController.forward();
+    }
   }
 
   void _playDiceGame() async {
@@ -6386,6 +8494,7 @@ class _SettlementGamesDialogState extends State<_SettlementGamesDialog> with Tic
       _gameResult = 'Rolling dice...';
       _currentDice1 = '⚀';
       _currentDice2 = '⚀';
+      _currentUserWins = false;
     });
 
     // Start dice roll animation
@@ -6418,64 +8527,102 @@ class _SettlementGamesDialogState extends State<_SettlementGamesDialog> with Tic
     String winner;
     final debtorName = _getUserDisplayName(widget.settlement.debtorId);
     final creditorName = _getUserDisplayName(widget.settlement.creditorId);
+    const currentUserId = 'dev_user_123'; // In real app, get from auth
+    bool currentUserWins = false;
     
     if (debtorRoll < creditorRoll) {
       winner = '$debtorName pays! ($debtorName rolled $debtorRoll vs $creditorName rolled $creditorRoll)';
+      // Debtor pays - current user wins if they are the creditor
+      currentUserWins = (widget.settlement.creditorId == currentUserId);
     } else if (creditorRoll < debtorRoll) {
       winner = '$creditorName pays! ($creditorName rolled $creditorRoll vs $debtorName rolled $debtorRoll)';
+      // Creditor pays - current user wins if they are the debtor
+      currentUserWins = (widget.settlement.debtorId == currentUserId);
     } else {
       winner = 'Both rolled $debtorRoll! Roll again or split the cost!';
+      currentUserWins = false;
     }
 
     setState(() {
       _gameResult = winner;
       _isPlaying = false;
+      _currentUserWins = currentUserWins;
     });
     
-    _confettiController.forward();
+    if (currentUserWins) {
+      _confettiController.forward();
+    }
   }
 
   void _playWheelGame() async {
     setState(() {
       _isPlaying = true;
       _gameResult = 'Spinning the wheel...';
+      _currentUserWins = false;
     });
 
-    // Start wheel spin animation
-    _wheelSpinController.reset();
-    _wheelSpinController.forward();
-
-    // Simulate wheel spinning with longer duration for visual effect - more suspense
-    for (int i = 0; i < 40; i++) {
-      await Future.delayed(const Duration(milliseconds: 150));
-      if (mounted) {
-        setState(() {
-          _gameResult = 'Spinning the wheel...';
-        });
-      }
+    // Determine result first so we can animate to the correct position
+    final random = Random();
+    final payingPerson = random.nextBool() ? widget.settlement.debtorId : widget.settlement.creditorId;
+    final payingName = _getUserDisplayName(payingPerson);
+    const currentUserId = 'dev_user_123'; // In real app, get from auth
+    
+    // Determine if current user wins
+    bool currentUserWins = false;
+    if (payingPerson == widget.settlement.debtorId) {
+      // Debtor pays - current user wins if they are the creditor
+      currentUserWins = (widget.settlement.creditorId == currentUserId);
+    } else {
+      // Creditor pays - current user wins if they are the debtor
+      currentUserWins = (widget.settlement.debtorId == currentUserId);
     }
 
-    final random = Random();
-    final winner = random.nextBool() ? widget.settlement.debtorId : widget.settlement.creditorId;
-    final winnerName = _getUserDisplayName(winner);
-    final otherName = _getUserDisplayName(
-      winner == widget.settlement.debtorId 
-        ? widget.settlement.creditorId 
-        : widget.settlement.debtorId
+    // Calculate final wheel position based on result
+    // Creditor is top half (0-180 degrees), debtor is bottom half (180-360 degrees)
+    double finalRotation;
+    if (payingPerson == widget.settlement.creditorId) {
+      // Point to top half (creditor) - random position in upper semicircle
+      finalRotation = (random.nextDouble() * 3.14159); // 0 to π radians
+    } else {
+      // Point to bottom half (debtor) - random position in lower semicircle  
+      finalRotation = (3.14159 + random.nextDouble() * 3.14159); // π to 2π radians
+    }
+    
+    // Add multiple full rotations for spinning effect
+    finalRotation += 15 * 2 * 3.14159; // 15 full rotations plus final position
+
+    // Start wheel spin animation to calculated final position
+    _wheelSpinController.reset();
+    _wheelRotationAnimation = Tween<double>(
+      begin: 0.0, 
+      end: finalRotation / (2 * 3.14159), // Convert to rotations
+    ).animate(
+      CurvedAnimation(parent: _wheelSpinController, curve: Curves.easeOutCubic),
     );
+    _wheelSpinController.forward();
+
+    // Wait for the animation to complete
+    await Future.delayed(const Duration(milliseconds: 5500));
+    
+    // Short pause before revealing result
+    await Future.delayed(const Duration(milliseconds: 500));
     
     setState(() {
-      _gameResult = 'The wheel chooses $winnerName to pay! ($winnerName vs $otherName)';
+      _gameResult = 'The wheel chooses $payingName to pay!';
       _isPlaying = false;
+      _currentUserWins = currentUserWins;
     });
     
-    _confettiController.forward();
+    if (currentUserWins) {
+      _confettiController.forward();
+    }
   }
 
   void _playRPSGame() async {
     setState(() {
       _isPlaying = true;
       _gameResult = 'Rock... Paper... Scissors!';
+      _currentUserWins = false;
     });
 
     // Simulate RPS countdown with visual effect - slower for suspense
@@ -6495,24 +8642,35 @@ class _SettlementGamesDialogState extends State<_SettlementGamesDialog> with Tic
     
     final debtorName = _getUserDisplayName(widget.settlement.debtorId);
     final creditorName = _getUserDisplayName(widget.settlement.creditorId);
+    const currentUserId = 'dev_user_123'; // In real app, get from auth
     
     String winner;
+    bool currentUserWins = false;
+    
     if ((debtorChoice == 'Rock' && creditorChoice == 'Scissors') ||
         (debtorChoice == 'Paper' && creditorChoice == 'Rock') ||
         (debtorChoice == 'Scissors' && creditorChoice == 'Paper')) {
       winner = '$creditorName pays! ($debtorName: $debtorChoice beats $creditorName: $creditorChoice)';
+      // Creditor pays - current user wins if they are the debtor
+      currentUserWins = (widget.settlement.debtorId == currentUserId);
     } else if (debtorChoice == creditorChoice) {
       winner = 'Tie! Both chose $debtorChoice. Play again!';
+      currentUserWins = false;
     } else {
       winner = '$debtorName pays! ($creditorName: $creditorChoice beats $debtorName: $debtorChoice)';
+      // Debtor pays - current user wins if they are the creditor
+      currentUserWins = (widget.settlement.creditorId == currentUserId);
     }
 
     setState(() {
       _gameResult = winner;
       _isPlaying = false;
+      _currentUserWins = currentUserWins;
     });
     
-    _confettiController.forward();
+    if (currentUserWins) {
+      _confettiController.forward();
+    }
   }
 
   String _getCardName(int cardValue) {
@@ -6555,9 +8713,161 @@ class _SettlementGamesDialogState extends State<_SettlementGamesDialog> with Tic
       default: return '⚀';
     }
   }
+
+  // Helper methods for user display
+  String _getUserDisplayName(String userId) {
+    switch (userId) {
+      case 'dev_user_123': return 'You';
+      case 'user_alice': return 'Alice Johnson';
+      case 'user_bob': return 'Bob Smith';
+      case 'user_charlie': return 'Charlie Brown';
+      case 'user_david': return 'David Wilson';
+      case 'user_eve': return 'Eve Davis';
+      case 'user_frank': return 'Frank Miller';
+      case 'user_grace': return 'Grace Chen';
+      default:
+        // For phone/email based users, extract name from ID
+        if (userId.contains('@')) {
+          return userId.split('@')[0].replaceAll('.', ' ').split(' ')
+              .map((word) => word.isNotEmpty ? '${word[0].toUpperCase()}${word.substring(1)}' : '')
+              .join(' ');
+        } else if (userId.startsWith('+')) {
+          return 'Contact ${userId.substring(userId.length - 4)}';
+        }
+        return userId.length > 8 ? '${userId.substring(0, 8)}...' : userId;
+    }
+  }
+
+  Color _getUserColor(String userId) {
+    // Generate a consistent color based on user ID
+    final colors = [
+      const Color(0xFFE53E3E),
+      const Color(0xFF38A169),
+      const Color(0xFF3182CE),
+      const Color(0xFF805AD5),
+      const Color(0xFFD69E2E),
+      const Color(0xFFDD6B20),
+    ];
+    final hash = userId.hashCode;
+    return colors[hash.abs() % colors.length];
+  }
+
+  String _getUserInitials(String userId) {
+    final displayName = _getUserDisplayName(userId);
+    
+    // Split into words and take first letter of each
+    final words = displayName.split(' ');
+    if (words.length >= 2) {
+      // For multi-word names, take first letter of first two words
+      return '${words[0][0]}${words[1][0]}'.toUpperCase();
+    } else if (words.isNotEmpty && words[0].length >= 2) {
+      // For single word names, take first two letters
+      return words[0].substring(0, 2).toUpperCase();
+    } else {
+      // Fallback to first letter
+      return displayName.isNotEmpty ? displayName[0].toUpperCase() : '?';
+    }
+  }
+
+  String _formatCents(int cents) {
+    return '\$${(cents / 100).toStringAsFixed(2)}';
+  }
 }
 
 // Custom painter for confetti effect
+class WheelPainter extends CustomPainter {
+  final String debtorName;
+  final String creditorName;
+
+  WheelPainter({required this.debtorName, required this.creditorName});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final center = Offset(size.width / 2, size.height / 2);
+    final radius = size.width / 2;
+
+    // Draw the two halves of the wheel
+    final paint1 = Paint()
+      ..color = const Color(0xFF7C3AED)
+      ..style = PaintingStyle.fill;
+    
+    final paint2 = Paint()
+      ..color = const Color(0xFF06B6D4)
+      ..style = PaintingStyle.fill;
+
+    // Draw first half (top)
+    canvas.drawArc(
+      Rect.fromCircle(center: center, radius: radius),
+      -3.14159 / 2, // -90 degrees
+      3.14159, // 180 degrees
+      true,
+      paint1,
+    );
+
+    // Draw second half (bottom)
+    canvas.drawArc(
+      Rect.fromCircle(center: center, radius: radius),
+      3.14159 / 2, // 90 degrees
+      3.14159, // 180 degrees
+      true,
+      paint2,
+    );
+
+    // Draw dividing lines
+    final linePaint = Paint()
+      ..color = Colors.white
+      ..strokeWidth = 2
+      ..style = PaintingStyle.stroke;
+
+    canvas.drawLine(
+      Offset(center.dx - radius, center.dy),
+      Offset(center.dx + radius, center.dy),
+      linePaint,
+    );
+
+    // Draw text for creditor (top half)
+    final creditorTextPainter = TextPainter(
+      text: TextSpan(
+        text: creditorName,
+        style: const TextStyle(
+          color: Colors.white,
+          fontSize: 8,
+          fontWeight: FontWeight.bold,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    );
+    creditorTextPainter.layout();
+    creditorTextPainter.paint(
+      canvas,
+      Offset(center.dx - creditorTextPainter.width / 2, center.dy - radius / 2 - creditorTextPainter.height / 2),
+    );
+
+    // Draw text for debtor (bottom half)
+    final debtorTextPainter = TextPainter(
+      text: TextSpan(
+        text: debtorName,
+        style: const TextStyle(
+          color: Colors.white,
+          fontSize: 8,
+          fontWeight: FontWeight.bold,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    );
+    debtorTextPainter.layout();
+    debtorTextPainter.paint(
+      canvas,
+      Offset(center.dx - debtorTextPainter.width / 2, center.dy + radius / 2 - debtorTextPainter.height / 2),
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) {
+    return false;
+  }
+}
+
 class ConfettiPainter extends CustomPainter {
   final double animationValue;
   
