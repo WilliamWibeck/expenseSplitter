@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -12,13 +13,20 @@ import 'firebase_options.dart';
 import 'data/firestore_repository.dart';
 import 'models/group.dart';
 import 'models/expense.dart';
-import 'models/settlement.dart';
+import 'models/user_profile.dart';
+import 'data/user_profile_repository.dart';
+import 'screens/user_profile_screen.dart';
+import 'screens/user_search_screen.dart';
+
+// Developer mode data providers
 import 'package:image_picker/image_picker.dart';
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
 import 'notifications/notifications_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'services/swish_return_detector.dart';
+import 'dart:convert';
+import 'package:http/http.dart' as http;
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -28,7 +36,7 @@ Future<void> main() async {
     );
   } on UnsupportedError {
     // For platforms without generated options (e.g., linux), fall back.
-  await Firebase.initializeApp();
+    await Firebase.initializeApp();
   }
   runApp(const ProviderScope(child: MyApp()));
 }
@@ -125,6 +133,93 @@ class DeveloperGroupsNotifier extends Notifier<List<Group>> {
 }
 
 final developerGroupsProvider = NotifierProvider<DeveloperGroupsNotifier, List<Group>>(DeveloperGroupsNotifier.new);
+
+// Developer user profiles provider - mutable state
+class DeveloperUserProfilesNotifier extends Notifier<Map<String, UserProfile>> {
+  @override
+  Map<String, UserProfile> build() {
+    return {
+      'dev_user_123': UserProfile(
+        id: 'dev_user_123',
+        displayName: 'You (Developer)',
+        email: 'developer@example.com',
+        phoneNumber: '+46701234567',
+        bio: 'App developer testing the expense splitter',
+        createdAtMs: DateTime.now().subtract(const Duration(days: 30)).millisecondsSinceEpoch,
+        updatedAtMs: DateTime.now().millisecondsSinceEpoch,
+        preferences: {
+          'notifications': true,
+          'currency': 'SEK',
+          'language': 'en',
+        },
+      ),
+      'user_alice': UserProfile(
+        id: 'user_alice',
+        displayName: 'Alice Johnson',
+        email: 'alice@example.com',
+        phoneNumber: '+46701234568',
+        bio: 'Loves traveling and good food',
+        createdAtMs: DateTime.now().subtract(const Duration(days: 15)).millisecondsSinceEpoch,
+        updatedAtMs: DateTime.now().subtract(const Duration(days: 2)).millisecondsSinceEpoch,
+      ),
+      'user_bob': UserProfile(
+        id: 'user_bob',
+        displayName: 'Bob Smith',
+        email: 'bob@example.com',
+        phoneNumber: '+46701234569',
+        createdAtMs: DateTime.now().subtract(const Duration(days: 10)).millisecondsSinceEpoch,
+        updatedAtMs: DateTime.now().subtract(const Duration(days: 1)).millisecondsSinceEpoch,
+      ),
+      'user_charlie': UserProfile(
+        id: 'user_charlie',
+        displayName: 'Charlie Brown',
+        email: 'charlie@example.com',
+        createdAtMs: DateTime.now().subtract(const Duration(days: 8)).millisecondsSinceEpoch,
+        updatedAtMs: DateTime.now().subtract(const Duration(days: 3)).millisecondsSinceEpoch,
+      ),
+      'user_david': UserProfile(
+        id: 'user_david',
+        displayName: 'David Wilson',
+        email: 'david@example.com',
+        phoneNumber: '+46701234570',
+        bio: 'Pizza enthusiast',
+        createdAtMs: DateTime.now().subtract(const Duration(days: 5)).millisecondsSinceEpoch,
+        updatedAtMs: DateTime.now().millisecondsSinceEpoch,
+      ),
+      'user_eve': UserProfile(
+        id: 'user_eve',
+        displayName: 'Eve Davis',
+        email: 'eve@example.com',
+        createdAtMs: DateTime.now().subtract(const Duration(days: 3)).millisecondsSinceEpoch,
+        updatedAtMs: DateTime.now().subtract(const Duration(hours: 12)).millisecondsSinceEpoch,
+      ),
+    };
+  }
+
+  void updateProfile(UserProfile profile) {
+    state = {
+      ...state,
+      profile.id: profile,
+    };
+  }
+}
+
+final developerUserProfilesProvider = NotifierProvider<DeveloperUserProfilesNotifier, Map<String, UserProfile>>(
+  DeveloperUserProfilesNotifier.new,
+);
+
+// Get user profile by ID (works with both dev and real data)
+final userProfileByIdProvider = Provider.family<UserProfile?, String>((ref, userId) {
+  final devMode = ref.watch(developerModeProvider);
+  
+  if (devMode) {
+    final devProfiles = ref.watch(developerUserProfilesProvider);
+    return devProfiles[userId];
+  } else {
+    // TODO: Connect to real user profile data
+    return null;
+  }
+});
 
 // Store developer expenses in a simple map
 final Map<String, List<Expense>> _developerExpensesMap = {};
@@ -292,8 +387,32 @@ String _getUserDisplayName(String userId) {
           word.isEmpty ? '' : '${word[0].toUpperCase()}${word.substring(1)}'
         ).join(' ');
       }
+      // For real users with Firebase UIDs, try to show a friendlier name
+      if (userId.length > 10) {
+        return 'User ${userId.substring(0, 8)}'; // Show first 8 chars of UID
+      }
       return userId;
   }
+}
+
+// Enhanced helper function that uses user profiles
+String getUserDisplayNameFromProfile(String userId, WidgetRef ref) {
+  final devMode = ref.watch(developerModeProvider);
+  final currentUser = ref.watch(currentUserProvider);
+  
+  // Check if this is the current user
+  if (currentUser != null && userId == currentUser.uid) {
+    // Use the current user's display name from authentication
+    if (currentUser.displayName != null && currentUser.displayName!.isNotEmpty) {
+      return devMode ? 'You (${currentUser.displayName})' : 'You';
+    }
+  }
+  
+  final userProfile = ref.watch(userProfileByIdProvider(userId));
+  if (userProfile != null) {
+    return userId == 'dev_user_123' ? 'You' : userProfile.displayName;
+  }
+  return _getUserDisplayName(userId); // Fallback to old method
 }
 
 String? _getUserPhoneNumber(String userId) {
@@ -534,9 +653,389 @@ String _formatDate(int timestampMs) {
   }
 }
 
+// Currency conversion service
+class CurrencyConversionService {
+  static const String _apiKey = 'free'; // Using free tier
+  static const String _baseUrl = 'https://api.exchangerate-api.com/v4/latest';
+  static const String _cacheKey = 'exchange_rates_cache';
+  static const String _cacheTimeKey = 'exchange_rates_cache_time';
+  static const Duration _cacheExpiry = Duration(hours: 1); // Cache for 1 hour
+  
+  static Map<String, double>? _cachedRates;
+  static DateTime? _cacheTime;
+  
+  // Fallback exchange rates (approximate) - used when API is unavailable
+  static const Map<String, double> _fallbackRates = {
+    'USD': 1.0,      // Base currency
+    'EUR': 0.85,     // Euro
+    'GBP': 0.73,     // British Pound
+    'JPY': 110.0,    // Japanese Yen
+    'CAD': 1.25,     // Canadian Dollar
+    'AUD': 1.35,     // Australian Dollar
+    'CHF': 0.92,     // Swiss Franc
+    'SEK': 8.5,      // Swedish Krona
+    'NOK': 8.8,      // Norwegian Krone
+    'DKK': 6.4,      // Danish Krone
+  };
+
+  static Future<Map<String, double>> getExchangeRates() async {
+    try {
+      // Check cache first
+      if (_cachedRates != null && _cacheTime != null) {
+        if (DateTime.now().difference(_cacheTime!) < _cacheExpiry) {
+          return _cachedRates!;
+        }
+      }
+
+      // Try to load from SharedPreferences
+      final prefs = await SharedPreferences.getInstance();
+      final cachedData = prefs.getString(_cacheKey);
+      final cacheTimeStr = prefs.getString(_cacheTimeKey);
+      
+      if (cachedData != null && cacheTimeStr != null) {
+        final cacheTime = DateTime.parse(cacheTimeStr);
+        if (DateTime.now().difference(cacheTime) < _cacheExpiry) {
+          final Map<String, dynamic> decoded = json.decode(cachedData);
+          _cachedRates = decoded.map((key, value) => MapEntry(key, value.toDouble()));
+          _cacheTime = cacheTime;
+          return _cachedRates!;
+        }
+      }
+
+      // Fetch fresh data from API
+      final response = await http.get(
+        Uri.parse('$_baseUrl/USD'),
+        headers: {'Accept': 'application/json'},
+      ).timeout(const Duration(seconds: 10));
+
+      if (response.statusCode == 200) {
+        final Map<String, dynamic> data = json.decode(response.body);
+        final Map<String, dynamic> rates = data['rates'];
+        
+        _cachedRates = rates.map((key, value) => MapEntry(key, value.toDouble()));
+        _cacheTime = DateTime.now();
+        
+        // Cache the results
+        await prefs.setString(_cacheKey, json.encode(_cachedRates));
+        await prefs.setString(_cacheTimeKey, _cacheTime!.toIso8601String());
+        
+        return _cachedRates!;
+      } else {
+        throw Exception('Failed to fetch exchange rates: ${response.statusCode}');
+      }
+    } catch (e) {
+      print('Error fetching exchange rates: $e');
+      print('Using fallback rates');
+      
+      // Return fallback rates if API fails
+      _cachedRates = Map.from(_fallbackRates);
+      _cacheTime = DateTime.now();
+      return _cachedRates!;
+    }
+  }
+
+  static Future<double> convertCurrency(
+    double amount,
+    String fromCurrency,
+    String toCurrency,
+  ) async {
+    if (fromCurrency == toCurrency) return amount;
+    
+    try {
+      final rates = await getExchangeRates();
+      
+      final fromRate = rates[fromCurrency] ?? _fallbackRates[fromCurrency] ?? 1.0;
+      final toRate = rates[toCurrency] ?? _fallbackRates[toCurrency] ?? 1.0;
+      
+      // Convert from source currency to USD, then to target currency
+      final usdAmount = amount / fromRate;
+      final convertedAmount = usdAmount * toRate;
+      
+      return convertedAmount;
+    } catch (e) {
+      print('Error converting currency: $e');
+      // Return original amount if conversion fails
+      return amount;
+    }
+  }
+
+  static Future<int> convertCents(
+    int cents,
+    String fromCurrency,
+    String toCurrency,
+  ) async {
+    final amount = cents / 100.0;
+    final convertedAmount = await convertCurrency(amount, fromCurrency, toCurrency);
+    return (convertedAmount * 100).round();
+  }
+}
+
+// Enhanced currency formatter with conversion
+class CurrencyFormatter {
+  static const Map<String, String> currencySymbols = {
+    'USD': '\$',
+    'EUR': '€',
+    'GBP': '£',
+    'JPY': '¥',
+    'CAD': 'C\$',
+    'AUD': 'A\$',
+    'CHF': 'CHF ',
+    'SEK': 'kr',
+    'NOK': 'kr',
+    'DKK': 'kr',
+  };
+
+  static const Map<String, bool> symbolAfterAmount = {
+    'USD': false,
+    'EUR': false,
+    'GBP': false,
+    'JPY': false,
+    'CAD': false,
+    'AUD': false,
+    'CHF': false,
+    'SEK': true,
+    'NOK': true,
+    'DKK': true,
+  };
+
+  // Store base currency for the app (the currency expenses were originally entered in)
+  static const String baseCurrency = 'USD';
+
+  static String formatCents(int cents, String currencyCode) {
+    final double amount = cents / 100.0;
+    return formatAmount(amount, currencyCode);
+  }
+
+  static String formatAmount(double amount, String currencyCode) {
+    final symbol = currencySymbols[currencyCode] ?? '\$';
+    final afterAmount = symbolAfterAmount[currencyCode] ?? false;
+    
+    // Special handling for JPY (no decimal places)
+    if (currencyCode == 'JPY') {
+      final jpyAmount = amount.round();
+      return afterAmount ? '$jpyAmount $symbol' : '$symbol$jpyAmount';
+    }
+    
+    final formattedAmount = amount.toStringAsFixed(2);
+    return afterAmount ? '$formattedAmount $symbol' : '$symbol$formattedAmount';
+  }
+
+  // Convert and format cents from base currency to display currency
+  static Future<String> formatCentsWithConversion(
+    int cents, 
+    String displayCurrency, {
+    String fromCurrency = baseCurrency,
+  }) async {
+    try {
+      final convertedCents = await CurrencyConversionService.convertCents(
+        cents, 
+        fromCurrency, 
+        displayCurrency,
+      );
+      return formatCents(convertedCents, displayCurrency);
+    } catch (e) {
+      print('Error converting currency: $e');
+      // Fallback to original formatting if conversion fails
+      return formatCents(cents, displayCurrency);
+    }
+  }
+
+  // Convert and format amount from base currency to display currency
+  static Future<String> formatAmountWithConversion(
+    double amount, 
+    String displayCurrency, {
+    String fromCurrency = baseCurrency,
+  }) async {
+    try {
+      final convertedAmount = await CurrencyConversionService.convertCurrency(
+        amount, 
+        fromCurrency, 
+        displayCurrency,
+      );
+      return formatAmount(convertedAmount, displayCurrency);
+    } catch (e) {
+      print('Error converting currency: $e');
+      // Fallback to original formatting if conversion fails
+      return formatAmount(amount, displayCurrency);
+    }
+  }
+
+  // Get exchange rate info for display
+  static Future<String> getExchangeRateInfo(String fromCurrency, String toCurrency) async {
+    if (fromCurrency == toCurrency) return '';
+    
+    try {
+      final convertedAmount = await CurrencyConversionService.convertCurrency(1.0, fromCurrency, toCurrency);
+      return '1 $fromCurrency = ${formatAmount(convertedAmount, toCurrency)}';
+    } catch (e) {
+      return 'Exchange rate unavailable';
+    }
+  }
+}
+
+// Language localization utility
+class AppLocalizations {
+  static const Map<String, Map<String, String>> _localizedStrings = {
+    'en': {
+      'your_groups': 'Your Groups',
+      'settings': 'Settings',
+      'sign_out': 'Sign out',
+      'toggle_theme': 'Toggle theme',
+      'appearance': 'Appearance',
+      'theme': 'Theme',
+      'dark': 'Dark',
+      'light': 'Light',
+      'localization': 'Localization',
+      'language': 'Language',
+      'currency': 'Currency',
+      'about': 'About',
+      'app_version': 'App Version',
+      'privacy_policy': 'Privacy Policy',
+      'view_privacy_policy': 'View our privacy policy',
+      'select_language': 'Select Language',
+      'select_currency': 'Select Currency',
+      'cancel': 'Cancel',
+      'create_group': 'Create Group',
+      'join_group': 'Join Group',
+      'group_name': 'Group Name',
+      'create': 'Create',
+      'balance': 'Balance',
+      'all_settled': 'All settled up!',
+      'profile': 'Profile',
+      'edit_profile': 'Edit Profile',
+      'manage_your_profile': 'Manage your profile information',
+    },
+    'es': {
+      'your_groups': 'Tus Grupos',
+      'settings': 'Configuración',
+      'sign_out': 'Cerrar sesión',
+      'toggle_theme': 'Cambiar tema',
+      'appearance': 'Apariencia',
+      'theme': 'Tema',
+      'dark': 'Oscuro',
+      'light': 'Claro',
+      'localization': 'Localización',
+      'language': 'Idioma',
+      'currency': 'Moneda',
+      'about': 'Acerca de',
+      'app_version': 'Versión de la App',
+      'privacy_policy': 'Política de Privacidad',
+      'view_privacy_policy': 'Ver nuestra política de privacidad',
+      'select_language': 'Seleccionar Idioma',
+      'select_currency': 'Seleccionar Moneda',
+      'cancel': 'Cancelar',
+      'create_group': 'Crear Grupo',
+      'join_group': 'Unirse al Grupo',
+      'group_name': 'Nombre del Grupo',
+      'create': 'Crear',
+      'balance': 'Balance',
+      'all_settled': '¡Todo saldado!',
+      'profile': 'Perfil',
+      'edit_profile': 'Editar Perfil',
+      'manage_your_profile': 'Gestiona tu información de perfil',
+    },
+    'fr': {
+      'your_groups': 'Vos Groupes',
+      'settings': 'Paramètres',
+      'sign_out': 'Se déconnecter',
+      'toggle_theme': 'Changer de thème',
+      'appearance': 'Apparence',
+      'theme': 'Thème',
+      'dark': 'Sombre',
+      'light': 'Clair',
+      'localization': 'Localisation',
+      'language': 'Langue',
+      'currency': 'Devise',
+      'about': 'À propos',
+      'app_version': 'Version de l\'App',
+      'privacy_policy': 'Politique de Confidentialité',
+      'view_privacy_policy': 'Voir notre politique de confidentialité',
+      'select_language': 'Sélectionner la Langue',
+      'select_currency': 'Sélectionner la Devise',
+      'cancel': 'Annuler',
+      'create_group': 'Créer un Groupe',
+      'join_group': 'Rejoindre le Groupe',
+      'group_name': 'Nom du Groupe',
+      'create': 'Créer',
+      'balance': 'Solde',
+      'all_settled': 'Tout est réglé !',
+      'profile': 'Profil',
+      'edit_profile': 'Modifier le Profil',
+      'manage_your_profile': 'Gérez vos informations de profil',
+    },
+    'de': {
+      'your_groups': 'Ihre Gruppen',
+      'settings': 'Einstellungen',
+      'sign_out': 'Abmelden',
+      'toggle_theme': 'Thema wechseln',
+      'appearance': 'Erscheinungsbild',
+      'theme': 'Thema',
+      'dark': 'Dunkel',
+      'light': 'Hell',
+      'localization': 'Lokalisierung',
+      'language': 'Sprache',
+      'currency': 'Währung',
+      'about': 'Über',
+      'app_version': 'App-Version',
+      'privacy_policy': 'Datenschutzrichtlinie',
+      'view_privacy_policy': 'Unsere Datenschutzrichtlinie anzeigen',
+      'select_language': 'Sprache Auswählen',
+      'select_currency': 'Währung Auswählen',
+      'cancel': 'Abbrechen',
+      'create_group': 'Gruppe Erstellen',
+      'join_group': 'Gruppe Beitreten',
+      'group_name': 'Gruppenname',
+      'create': 'Erstellen',
+      'balance': 'Saldo',
+      'all_settled': 'Alles ausgeglichen!',
+      'profile': 'Profil',
+      'edit_profile': 'Profil bearbeiten',
+      'manage_your_profile': 'Verwalten Sie Ihre Profilinformationen',
+    },
+    'sv': {
+      'your_groups': 'Dina Grupper',
+      'settings': 'Inställningar',
+      'sign_out': 'Logga ut',
+      'toggle_theme': 'Växla tema',
+      'appearance': 'Utseende',
+      'theme': 'Tema',
+      'dark': 'Mörkt',
+      'light': 'Ljust',
+      'localization': 'Lokalisering',
+      'language': 'Språk',
+      'currency': 'Valuta',
+      'about': 'Om',
+      'app_version': 'App-version',
+      'privacy_policy': 'Integritetspolicy',
+      'view_privacy_policy': 'Se vår integritetspolicy',
+      'select_language': 'Välj Språk',
+      'select_currency': 'Välj Valuta',
+      'cancel': 'Avbryt',
+      'create_group': 'Skapa Grupp',
+      'join_group': 'Gå med i Grupp',
+      'group_name': 'Gruppnamn',
+      'create': 'Skapa',
+      'balance': 'Saldo',
+      'all_settled': 'Allt är klart!',
+      'profile': 'Profil',
+      'edit_profile': 'Redigera Profil',
+      'manage_your_profile': 'Hantera din profilinformation',
+    },
+  };
+
+  static String translate(String key, String languageCode) {
+    return _localizedStrings[languageCode]?[key] ?? _localizedStrings['en']?[key] ?? key;
+  }
+}
+
 String _formatCents(int cents) {
   final double amount = cents / 100.0;
   return '\$${amount.toStringAsFixed(2)}';
+}
+
+// Helper function that will be replaced by widget-specific methods
+String formatCentsWithCurrency(int cents, String currencyCode) {
+  return CurrencyFormatter.formatCents(cents, currencyCode);
 }
 
 Future<void> _showSwishPaymentDialog({
@@ -656,6 +1155,21 @@ class MyApp extends ConsumerWidget {
           path: '/join',
           name: 'join',
           builder: (context, state) => const JoinGroupScreen(),
+        ),
+        GoRoute(
+          path: '/settings',
+          name: 'settings',
+          builder: (context, state) => const SettingsScreen(),
+        ),
+        GoRoute(
+          path: '/profile',
+          name: 'profile',
+          builder: (context, state) => const UserProfileScreen(),
+        ),
+        GoRoute(
+          path: '/search-users',
+          name: 'search_users',
+          builder: (context, state) => const UserSearchScreen(),
         ),
       ],
     );
@@ -1026,6 +1540,35 @@ class _AuthScreenContentState extends ConsumerState<_AuthScreenContent> {
     }
   }
 
+  void _createUserProfileInBackground(AppUser user, WidgetRef ref) {
+    // Create user profile in background without blocking UI
+    Future.microtask(() async {
+      try {
+        final userProfileRepo = ref.read(userProfileRepositoryProvider);
+        final existingProfile = await userProfileRepo.getUserProfile(user.uid);
+        
+        if (existingProfile == null) {
+          // Create new profile with user data
+          final newProfile = UserProfile(
+            id: user.uid,
+            displayName: user.displayName ?? 'User',
+            email: user.email ?? '',
+            phoneNumber: user.phoneNumber ?? '',
+            bio: '',
+            profileImageUrl: '',
+            createdAtMs: DateTime.now().millisecondsSinceEpoch,
+            updatedAtMs: DateTime.now().millisecondsSinceEpoch,
+          );
+          await userProfileRepo.saveUserProfile(newProfile);
+          print('User profile created successfully for ${user.uid}');
+        }
+      } catch (e) {
+        print('Error creating user profile in background: $e');
+        // Don't prevent app functionality if profile creation fails
+      }
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final AuthRepository repo = ref.read(authRepositoryProvider);
@@ -1177,7 +1720,14 @@ class _AuthScreenContentState extends ConsumerState<_AuthScreenContent> {
               : () => _handle(() async {
                     final user = await repo.signInWithGoogle();
                     ref.read(currentUserProvider.notifier).set(user);
+                    
+                    // Navigate immediately, then create profile in background
                     if (context.mounted) context.go('/groups');
+                    
+                    // Create user profile in background (don't block sign-in)
+                    if (user != null) {
+                      _createUserProfileInBackground(user, ref);
+                    }
                   }),
                   icon: const Icon(Icons.g_mobiledata, size: 22, color: Color(0xFF4285F4)),
                   label: Text(
@@ -1306,7 +1856,14 @@ class _AuthScreenContentState extends ConsumerState<_AuthScreenContent> {
                       password: _passwordController.text,
                     );
                     ref.read(currentUserProvider.notifier).set(user);
+                    
+                    // Navigate immediately, then create profile in background
                     if (context.mounted) context.go('/groups');
+                    
+                    // Create user profile in background (don't block sign-in)
+                    if (user != null) {
+                      _createUserProfileInBackground(user, ref);
+                    }
                   }),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: Colors.transparent,
@@ -1503,6 +2060,75 @@ class GroupsScreen extends ConsumerStatefulWidget {
 
 class _GroupsScreenState extends ConsumerState<GroupsScreen> {
   final Map<String, bool> _expandedGroups = {};
+  _OverallBalance? _cachedBalance;
+  int _lastBalanceCalculationHash = 0;
+  Stream<List<Group>>? _groupsStream;
+
+  @override
+  void initState() {
+    super.initState();
+    _initializeGroupsStream();
+  }
+
+  void _initializeGroupsStream() {
+    // Only initialize if not already done
+    if (_groupsStream != null) return;
+    
+    final currentUser = fb.FirebaseAuth.instance.currentUser;
+    if (currentUser != null) {
+      _groupsStream = ref.read(firestoreRepositoryProvider).watchGroups(currentUser.uid);
+    } else {
+      _groupsStream = Stream.value(<Group>[]);
+    }
+  }
+
+  String _formatCents(int cents) {
+    final currency = ref.watch(currencyProvider);
+    return CurrencyFormatter.formatCents(cents, currency);
+  }
+
+  Future<String> _formatCentsWithConversion(int cents) async {
+    final currency = ref.watch(currencyProvider);
+    return await CurrencyFormatter.formatCentsWithConversion(cents, currency);
+  }
+
+  String _translate(String key) {
+    final language = ref.watch(languageProvider);
+    return AppLocalizations.translate(key, language);
+  }
+
+  Widget _buildUserAvatar(String userId, WidgetRef ref, {double size = 32}) {
+    final userProfile = ref.watch(userProfileByIdProvider(userId));
+    
+    return Container(
+      width: size,
+      height: size,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(size / 2),
+        border: Border.all(
+          color: Colors.white,
+          width: 2,
+        ),
+      ),
+      child: CircleAvatar(
+        radius: (size - 4) / 2,
+        backgroundColor: _getUserColor(userId),
+        backgroundImage: userProfile?.profileImageUrl != null
+            ? NetworkImage(userProfile!.profileImageUrl!)
+            : null,
+        child: userProfile?.profileImageUrl == null
+            ? Text(
+                userProfile?.initials ?? _getUserInitials(userId),
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: size * 0.4,
+                  fontWeight: FontWeight.w600,
+                ),
+              )
+            : null,
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -1510,9 +2136,24 @@ class _GroupsScreenState extends ConsumerState<GroupsScreen> {
     final devMode = ref.watch(developerModeProvider);
     final isDevUser = currentUser?.uid == 'dev_user_123' || devMode;
     
+    // Ensure groups stream is initialized for real users
+    if (!isDevUser && _groupsStream == null) {
+      _initializeGroupsStream();
+    }
+    
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Your Groups'),
+        leading: IconButton(
+          icon: const CircleAvatar(
+            backgroundColor: Color(0xFFE2E8F0),
+            child: Icon(Icons.person, color: Color(0xFF2D3748)),
+          ),
+          tooltip: _translate('profile'),
+          onPressed: () {
+            context.push('/profile');
+          },
+        ),
+        title: Text(_translate('your_groups')),
         backgroundColor: Colors.transparent,
         elevation: 0,
         actions: [
@@ -1529,17 +2170,28 @@ class _GroupsScreenState extends ConsumerState<GroupsScreen> {
                 icon: Icon(themeMode == ThemeMode.dark 
                   ? Icons.light_mode 
                   : Icons.dark_mode),
-                tooltip: 'Toggle theme',
+                tooltip: _translate('toggle_theme'),
               );
             },
           ),
           IconButton(
+            onPressed: () {
+              context.push('/settings');
+            },
+            icon: const Icon(Icons.settings),
+            tooltip: _translate('settings'),
+          ),
+          IconButton(
             onPressed: () async {
               await fb.FirebaseAuth.instance.signOut();
+              // Disable developer mode on logout
+              ref.read(developerModeProvider.notifier).setDeveloperMode(false);
+              // Clear current user
+              ref.read(currentUserProvider.notifier).set(null);
               context.go('/auth');
             },
             icon: const Icon(Icons.logout),
-            tooltip: 'Sign out',
+            tooltip: _translate('sign_out'),
           ),
         ],
       ),
@@ -1693,19 +2345,34 @@ class _GroupsScreenState extends ConsumerState<GroupsScreen> {
                                 },
                               )
                             : StreamBuilder<List<Group>>(
-                                stream: ref.watch(firestoreRepositoryProvider).watchGroups(fb.FirebaseAuth.instance.currentUser!.uid),
+                                stream: _groupsStream ?? Stream.value(<Group>[]),
                                 builder: (context, snap) {
                                   if (snap.connectionState == ConnectionState.waiting) {
-                                    return const Center(child: CircularProgressIndicator());
+                                    return Container(
+                                      padding: const EdgeInsets.all(32),
+                                      child: Column(
+                                        children: [
+                                          const CircularProgressIndicator(),
+                                          const SizedBox(height: 16),
+                                          Text(
+                                            'Loading your groups...',
+                                            style: TextStyle(
+                                              fontSize: 16,
+                                              color: const Color(0xFF718096),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    );
                                   }
                                   if (snap.hasError) {
                                     return Center(
                                       child: Column(
                                         children: [
-                                          const Icon(Icons.error, size: 48, color: Color(0xFFE53E3E)),
+                                          const Icon(Icons.cloud_off, size: 48, color: Color(0xFFE53E3E)),
                                           const SizedBox(height: 16),
                                           Text(
-                                            'Error loading groups',
+                                            'Connection Issue',
                                             style: TextStyle(
                                               fontSize: 18,
                                               fontWeight: FontWeight.w600,
@@ -1714,11 +2381,18 @@ class _GroupsScreenState extends ConsumerState<GroupsScreen> {
                                           ),
                                           const SizedBox(height: 8),
                                           Text(
-                                            snap.error.toString(),
+                                            'Your groups are temporarily unavailable.\nThey will reappear once connection is restored.',
+                                            textAlign: TextAlign.center,
                                             style: TextStyle(
                                               fontSize: 14,
                                               color: const Color(0xFFA0AEC0),
                                             ),
+                                          ),
+                                          const SizedBox(height: 16),
+                                          ElevatedButton.icon(
+                                            onPressed: () => setState(() {}), // Trigger rebuild
+                                            icon: const Icon(Icons.refresh),
+                                            label: const Text('Retry'),
                                           ),
                                         ],
                                       ),
@@ -1730,22 +2404,37 @@ class _GroupsScreenState extends ConsumerState<GroupsScreen> {
                                       padding: const EdgeInsets.all(32),
                                       child: Column(
                                         children: [
-                                          const Icon(Icons.inbox, size: 48, color: Color(0xFFCBD5E0)),
-                                          const SizedBox(height: 16),
+                                          const Icon(Icons.group_add, size: 64, color: Color(0xFF4A5568)),
+                                          const SizedBox(height: 24),
                                           Text(
-                                            'No groups yet',
+                                            'Welcome to Expense Splitter!',
                                             style: TextStyle(
-                                              fontSize: 18,
-                                              fontWeight: FontWeight.w600,
+                                              fontSize: 20,
+                                              fontWeight: FontWeight.bold,
+                                              color: const Color(0xFF2D3748),
+                                            ),
+                                          ),
+                                          const SizedBox(height: 12),
+                                          Text(
+                                            'Create your first group to start\nsplitting expenses with friends',
+                                            textAlign: TextAlign.center,
+                                            style: TextStyle(
+                                              fontSize: 16,
                                               color: const Color(0xFF718096),
                                             ),
                                           ),
-                                          const SizedBox(height: 8),
-                                          Text(
-                                            'Create your first group to get started',
-                                            style: TextStyle(
-                                              fontSize: 14,
-                                              color: const Color(0xFFA0AEC0),
+                                          const SizedBox(height: 24),
+                                          ElevatedButton.icon(
+                                            onPressed: () => _showNewGroupDialog(context, ref),
+                                            icon: const Icon(Icons.add_circle, color: Colors.white),
+                                            label: const Text('Create Your First Group'),
+                                            style: ElevatedButton.styleFrom(
+                                              backgroundColor: const Color(0xFF2D3748),
+                                              foregroundColor: Colors.white,
+                                              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+                                              shape: RoundedRectangleBorder(
+                                                borderRadius: BorderRadius.circular(12),
+                                              ),
                                             ),
                                           ),
                                         ],
@@ -1773,7 +2462,8 @@ class _GroupsScreenState extends ConsumerState<GroupsScreen> {
   Widget _buildBalanceIndicator(BuildContext context, WidgetRef ref, bool isDevUser) {
     // Calculate actual amounts owed and owing
     final balanceData = _calculateOverallBalance(ref, isDevUser);
-    print('💰 DEBUG Balance: You owe ${_formatCents(balanceData.youOwe)}, Owed to you ${_formatCents(balanceData.owedToYou)}');
+    
+    // Removed constant debug printing to improve performance
     
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 20),
@@ -1808,13 +2498,18 @@ class _GroupsScreenState extends ConsumerState<GroupsScreen> {
                   ),
                 ),
                 const SizedBox(height: 8),
-                Text(
-                  _formatCents(balanceData.youOwe),
-                  style: TextStyle(
-                    fontSize: 24,
-                    fontWeight: FontWeight.bold,
-                    color: const Color(0xFFE53E3E),
-                  ),
+                FutureBuilder<String>(
+                  future: _formatCentsWithConversion(balanceData.youOwe),
+                  builder: (context, snapshot) {
+                    return Text(
+                      snapshot.data ?? _formatCents(balanceData.youOwe),
+                      style: TextStyle(
+                        fontSize: 24,
+                        fontWeight: FontWeight.bold,
+                        color: const Color(0xFFE53E3E),
+                      ),
+                    );
+                  },
                 ),
               ],
             ),
@@ -1839,13 +2534,18 @@ class _GroupsScreenState extends ConsumerState<GroupsScreen> {
                   ),
                 ),
                 const SizedBox(height: 8),
-                Text(
-                  _formatCents(balanceData.owedToYou),
-                  style: TextStyle(
-                    fontSize: 24,
-                    fontWeight: FontWeight.bold,
-                    color: const Color(0xFF48BB78),
-                  ),
+                FutureBuilder<String>(
+                  future: _formatCentsWithConversion(balanceData.owedToYou),
+                  builder: (context, snapshot) {
+                    return Text(
+                      snapshot.data ?? _formatCents(balanceData.owedToYou),
+                      style: TextStyle(
+                        fontSize: 24,
+                        fontWeight: FontWeight.bold,
+                        color: const Color(0xFF48BB78),
+                      ),
+                    );
+                  },
                 ),
               ],
             ),
@@ -1856,6 +2556,25 @@ class _GroupsScreenState extends ConsumerState<GroupsScreen> {
   }
 
   _OverallBalance _calculateOverallBalance(WidgetRef ref, bool isDevUser) {
+    // Create a simple hash of the relevant data to check if we need to recalculate
+    int currentHash = 0;
+    
+    if (isDevUser) {
+      final groups = ref.watch(developerGroupsProvider);
+      currentHash = groups.length.hashCode;
+      // Add more factors to hash if needed
+      for (final group in groups) {
+        final expenses = ref.watch(developerExpensesProvider(group.id));
+        currentHash ^= expenses.length.hashCode;
+      }
+    }
+    
+    // If hash matches cached calculation, return cached result
+    if (_cachedBalance != null && currentHash == _lastBalanceCalculationHash) {
+      return _cachedBalance!;
+    }
+    
+    // Calculate new balance
     int totalYouOwe = 0;
     int totalOwedToYou = 0;
     
@@ -1884,7 +2603,11 @@ class _GroupsScreenState extends ConsumerState<GroupsScreen> {
       totalOwedToYou = 0;
     }
     
-    return _OverallBalance(youOwe: totalYouOwe, owedToYou: totalOwedToYou);
+    // Cache the result
+    _cachedBalance = _OverallBalance(youOwe: totalYouOwe, owedToYou: totalOwedToYou);
+    _lastBalanceCalculationHash = currentHash;
+    
+    return _cachedBalance!;
   }
 
   Map<String, int> _calculateBalancesForGroup(Group group, List<Expense> expenses, String currentUserId) {
@@ -1968,58 +2691,58 @@ class _GroupsScreenState extends ConsumerState<GroupsScreen> {
                             ),
                           ),
                         ),
-                        // User avatars
+                        // User avatars with add button and +N overflow
                         Row(
-                          children: group.memberUserIds.take(4).map((userId) {
-                            return Container(
-                              margin: const EdgeInsets.only(left: 4),
-                              width: 28,
-                              height: 28,
-                              decoration: BoxDecoration(
-                                color: _getUserColor(userId),
-                                borderRadius: BorderRadius.circular(14),
-                                border: Border.all(
-                                  color: Colors.white,
-                                  width: 2,
-                                ),
-                              ),
-                              child: Center(
-                                child: Text(
-                                  _getUserInitials(userId),
-                                  style: const TextStyle(
+                          children: [
+                            // Add member button
+                            GestureDetector(
+                              onTap: () => _showAddMemberDialog(context, ref, group),
+                              child: Container(
+                                width: 28,
+                                height: 28,
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFF10B981),
+                                  borderRadius: BorderRadius.circular(14),
+                                  border: Border.all(
                                     color: Colors.white,
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.w600,
+                                    width: 2,
+                                  ),
+                                ),
+                                child: const Icon(Icons.add, color: Colors.white, size: 18),
+                              ),
+                            ),
+                            ...group.memberUserIds.take(3).map((userId) {
+                              return Container(
+                                margin: const EdgeInsets.only(left: 4),
+                                child: _buildUserAvatar(userId, ref, size: 28),
+                              );
+                            }),
+                            if (group.memberUserIds.length > 3)
+                              Container(
+                                margin: const EdgeInsets.only(left: 4),
+                                width: 28,
+                                height: 28,
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFF718096),
+                                  borderRadius: BorderRadius.circular(14),
+                                  border: Border.all(
+                                    color: Colors.white,
+                                    width: 2,
+                                  ),
+                                ),
+                                child: Center(
+                                  child: Text(
+                                    '+${group.memberUserIds.length - 3}',
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 10,
+                                      fontWeight: FontWeight.w600,
+                                    ),
                                   ),
                                 ),
                               ),
-                            );
-                          }).toList(),
+                          ],
                         ),
-                        if (group.memberUserIds.length > 4)
-                          Container(
-                            margin: const EdgeInsets.only(left: 4),
-                            width: 28,
-                            height: 28,
-                            decoration: BoxDecoration(
-                              color: const Color(0xFF718096),
-                              borderRadius: BorderRadius.circular(14),
-                              border: Border.all(
-                                color: Colors.white,
-                                width: 2,
-                              ),
-                            ),
-                            child: Center(
-                              child: Text(
-                                '+${group.memberUserIds.length - 4}',
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 10,
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
-                            ),
-                          ),
                         const SizedBox(width: 12),
                         // Expand arrow
                         AnimatedRotation(
@@ -2043,7 +2766,11 @@ class _GroupsScreenState extends ConsumerState<GroupsScreen> {
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text(
-                                'Group Balance',
+                                userBalance == 0
+                                  ? 'Group Balance'
+                                  : userBalance > 0
+                                    ? 'Owed'
+                                    : 'Owes',
                                 style: TextStyle(
                                   fontSize: 12,
                                   color: const Color(0xFF718096),
@@ -2051,21 +2778,26 @@ class _GroupsScreenState extends ConsumerState<GroupsScreen> {
                                 ),
                               ),
                               const SizedBox(height: 4),
-                              Text(
-                                userBalance == 0 
-                                  ? 'Even' 
-                                  : userBalance > 0 
-                                    ? '+${_formatCents(userBalance)}' 
-                                    : _formatCents(userBalance),
-                                style: TextStyle(
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.w600,
-                                  color: userBalance == 0 
-                                    ? const Color(0xFF2D3748)
-                                    : userBalance > 0 
-                                      ? Colors.green.shade700
-                                      : Colors.red.shade700,
-                                ),
+                              FutureBuilder<String>(
+                                future: userBalance == 0 
+                                  ? Future.value('Even')
+                                  : userBalance > 0
+                                    ? _formatCentsWithConversion(userBalance).then((amount) => '+$amount')
+                                    : _formatCentsWithConversion(userBalance.abs()).then((amount) => '-$amount'),
+                                builder: (context, snapshot) {
+                                  return Text(
+                                    snapshot.data ?? (userBalance == 0 ? 'Even' : _formatCents(userBalance)),
+                                    style: TextStyle(
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.w600,
+                                      color: userBalance == 0 
+                                        ? const Color(0xFF2D3748)
+                                        : userBalance > 0 
+                                          ? Colors.green.shade700
+                                          : Colors.red.shade700,
+                                    ),
+                                  );
+                                },
                               ),
                             ],
                           ),
@@ -2542,12 +3274,21 @@ class _GroupsScreenState extends ConsumerState<GroupsScreen> {
           padding: const EdgeInsets.all(20),
           child: Column(
             children: [
-              Icon(Icons.receipt_long, size: 32, color: const Color(0xFFCBD5E0)),
+              Icon(Icons.add_circle_outline, size: 32, color: const Color(0xFF4A5568)),
               const SizedBox(height: 8),
               Text(
-                'No expenses yet',
+                'Add your first expense',
                 style: TextStyle(
-                  fontSize: 14,
+                  fontSize: 16,
+                  fontWeight: FontWeight.w600,
+                  color: const Color(0xFF4A5568),
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                'Tap the + button to get started',
+                style: TextStyle(
+                  fontSize: 12,
                   color: const Color(0xFF718096),
                 ),
               ),
@@ -2600,13 +3341,18 @@ class _GroupsScreenState extends ConsumerState<GroupsScreen> {
                     ],
                   ),
                 ),
-                Text(
-                  _formatCents(expense.amountCents),
-                  style: const TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w600,
-                    color: Color(0xFF2D3748),
-                  ),
+                FutureBuilder<String>(
+                  future: _formatCentsWithConversion(expense.amountCents),
+                  builder: (context, snapshot) {
+                    return Text(
+                      snapshot.data ?? _formatCents(expense.amountCents),
+                      style: const TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                        color: Color(0xFF2D3748),
+                      ),
+                    );
+                  },
                 ),
               ],
             ),
@@ -2616,7 +3362,10 @@ class _GroupsScreenState extends ConsumerState<GroupsScreen> {
     } else {
       // Show real expenses from Firestore
       return StreamBuilder<List<Expense>>(
-        stream: ref.watch(firestoreRepositoryProvider).watchExpenses(group.id),
+        stream: ref.watch(firestoreRepositoryProvider).watchExpenses(group.id).timeout(
+          const Duration(seconds: 5),
+          onTimeout: (sink) => sink.add([]), // Return empty list on timeout
+        ),
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting) {
             return const Center(child: CircularProgressIndicator());
@@ -2633,12 +3382,21 @@ class _GroupsScreenState extends ConsumerState<GroupsScreen> {
               padding: const EdgeInsets.all(20),
               child: Column(
                 children: [
-                  Icon(Icons.receipt_long, size: 32, color: const Color(0xFFCBD5E0)),
+                  Icon(Icons.add_circle_outline, size: 32, color: const Color(0xFF4A5568)),
                   const SizedBox(height: 8),
                   Text(
-                    'No expenses yet',
+                    'Add your first expense',
                     style: TextStyle(
-                      fontSize: 14,
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600,
+                      color: const Color(0xFF4A5568),
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Tap the + button to get started',
+                    style: TextStyle(
+                      fontSize: 12,
                       color: const Color(0xFF718096),
                     ),
                   ),
@@ -2691,13 +3449,18 @@ class _GroupsScreenState extends ConsumerState<GroupsScreen> {
                         ],
                       ),
                     ),
-                    Text(
-                      _formatCents(expense.amountCents),
-                      style: const TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w600,
-                        color: Color(0xFF2D3748),
-                      ),
+                    FutureBuilder<String>(
+                      future: _formatCentsWithConversion(expense.amountCents),
+                      builder: (context, snapshot) {
+                        return Text(
+                          snapshot.data ?? _formatCents(expense.amountCents),
+                          style: const TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600,
+                            color: Color(0xFF2D3748),
+                          ),
+                        );
+                      },
                     ),
                   ],
                 ),
@@ -2901,19 +3664,30 @@ Expense Splitter makes it easy to split bills and track expenses with friends!
                 final user = fb.FirebaseAuth.instance.currentUser;
                 if (user != null) {
                   try {
+                    print('Creating group "$name" for user ${user.uid}');
                     final repo = ref.read(firestoreRepositoryProvider);
-                    await repo.createGroup(
+                    final groupId = await repo.createGroup(
                       name: name,
                       memberUserIds: [user.uid],
                     );
+                    print('Group created successfully with ID: $groupId');
                     Navigator.pop(context);
                     ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text('Group "$name" created successfully')),
+                      SnackBar(
+                        content: Text('Group "$name" created successfully'),
+                        backgroundColor: Colors.green,
+                        duration: const Duration(seconds: 3),
+                      ),
                     );
                   } catch (e) {
+                    print('Error creating group: $e');
                     Navigator.pop(context);
                     ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text('Error creating group: $e')),
+                      SnackBar(
+                        content: Text('Error creating group: $e'),
+                        backgroundColor: Colors.red,
+                        duration: const Duration(seconds: 5),
+                      ),
                     );
                   }
                 }
@@ -2983,266 +3757,142 @@ Expense Splitter makes it easy to split bills and track expenses with friends!
     
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        title: Row(
-          children: [
-            Icon(Icons.settings, color: Theme.of(context).colorScheme.primary),
-            const SizedBox(width: 8),
-            Text('Group Settings'),
-          ],
-        ),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // Group Info Section
-              Card(
-                child: Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Icon(Icons.group, size: 20, color: Theme.of(context).colorScheme.primary),
-                          const SizedBox(width: 8),
-                          Text('Group Information', style: TextStyle(fontWeight: FontWeight.w600)),
-                        ],
-                      ),
-                      const SizedBox(height: 12),
-                      Text('Name: ${group.name}', style: TextStyle(fontSize: 14)),
-                      const SizedBox(height: 4),
-                      Text('ID: ${group.id}', style: TextStyle(fontSize: 12, color: Colors.grey)),
-                      const SizedBox(height: 4),
-                      Text('Created: ${_formatDate(group.createdAtMs)}', style: TextStyle(fontSize: 12, color: Colors.grey)),
-                      if (isOwner) ...[
-                        const SizedBox(height: 4),
-                        Text('Owner: You', style: TextStyle(fontSize: 12, color: Colors.green.shade700, fontWeight: FontWeight.w500)),
-                      ],
-                    ],
-                  ),
-                ),
+      builder: (context) {
+        String? _editedGroupName = group.name;
+        return StatefulBuilder(
+          builder: (context, setState) => AlertDialog(
+            title: Row(
+              children: [
+                Icon(Icons.settings, color: Theme.of(context).colorScheme.primary),
+                const SizedBox(width: 8),
+                Text('Group Settings'),
+              ],
+            ),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+              // Group creation date
+              Text(
+                'Created: ' + DateTime.fromMillisecondsSinceEpoch(group.createdAtMs).toLocal().toString().split(' ').first,
+                style: TextStyle(fontSize: 13, color: Colors.grey.shade600),
               ),
               const SizedBox(height: 16),
-              // Share Group Section
-              Card(
-                child: Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Icon(Icons.share, size: 20, color: Theme.of(context).colorScheme.primary),
-                          const SizedBox(width: 8),
-                          Text('Share Group', style: TextStyle(fontWeight: FontWeight.w600)),
-                        ],
+              // Editable group name
+              Row(
+                children: [
+                  Expanded(
+                    child: TextFormField(
+                      initialValue: group.name,
+                      decoration: const InputDecoration(
+                        labelText: 'Group Name',
+                        border: OutlineInputBorder(),
+                        isDense: true,
                       ),
-                      const SizedBox(height: 12),
-                      // Share Code
-                      Row(
-                        children: [
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  'Share Code',
-                                  style: TextStyle(
-                                    fontSize: 12,
-                                    color: Colors.grey.shade600,
-                                    fontWeight: FontWeight.w500,
-                                  ),
-                                ),
-                                const SizedBox(height: 4),
-                                Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                                  decoration: BoxDecoration(
-                                    color: Theme.of(context).brightness == Brightness.dark
-                                        ? Colors.grey.shade800
-                                        : Colors.grey.shade100,
-                                    borderRadius: BorderRadius.circular(8),
-                                    border: Border.all(
-                                      color: Theme.of(context).brightness == Brightness.dark
-                                          ? Colors.grey.shade600
-                                          : Colors.grey.shade300,
-                                    ),
-                                  ),
-                                  child: Text(
-                                    group.shareCode ?? 'N/A',
-                                    style: TextStyle(
-                                      fontSize: 16,
-                                      fontWeight: FontWeight.w600,
-                                      fontFamily: 'monospace',
-                                      color: Theme.of(context).colorScheme.primary,
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                          const SizedBox(width: 12),
-                          // Copy Code Button
-                          Container(
-                            decoration: BoxDecoration(
-                              borderRadius: BorderRadius.circular(8),
-                              border: Border.all(
-                                color: Theme.of(context).colorScheme.primary.withOpacity(0.3),
-                              ),
-                            ),
-                            child: IconButton(
-                              onPressed: () => _copyShareCode(context, group.shareCode ?? ''),
-                              icon: Icon(
-                                Icons.copy,
-                                color: Theme.of(context).colorScheme.primary,
-                                size: 20,
-                              ),
-                              tooltip: 'Copy Share Code',
-                              constraints: const BoxConstraints(
-                                minWidth: 40,
-                                minHeight: 40,
-                              ),
-                              padding: EdgeInsets.zero,
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 16),
-                      // Share Link
-                      Container(
-                        width: double.infinity,
-                        child: ElevatedButton.icon(
-                          onPressed: () => _shareGroupLink(context, group),
-                          icon: const Icon(Icons.link, size: 18),
-                          label: const Text('Share Link'),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: Theme.of(context).colorScheme.primary,
-                            foregroundColor: Colors.white,
-                            padding: const EdgeInsets.symmetric(vertical: 12),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(8),
-                            ),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        'Share this link with others to invite them to join the group',
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: Colors.grey.shade600,
-                        ),
-                      ),
-                    ],
+                      onChanged: (value) => setState(() => _editedGroupName = value),
+                    ),
                   ),
-                ),
+                  const SizedBox(width: 8),
+                  ElevatedButton(
+                    onPressed: () async {
+                      if (_editedGroupName != null && _editedGroupName!.trim().isNotEmpty && _editedGroupName != group.name) {
+                        final updated = group.copyWith(name: _editedGroupName!.trim());
+                        ref.read(developerGroupsProvider.notifier).updateGroup(updated);
+                        Navigator.of(context).pop();
+                        _showGroupSettingsDialog(context, ref, updated);
+                      }
+                    },
+                    child: const Text('Save'),
+                  ),
+                ],
               ),
-              const SizedBox(height: 16),
-              // Group Members Section
-              Card(
-                child: Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Icon(Icons.people, size: 20, color: Theme.of(context).colorScheme.primary),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Text('Members (${group.memberUserIds.length})', style: TextStyle(fontWeight: FontWeight.w600)),
+              const SizedBox(height: 20),
+              // User list with remove buttons
+              Text('Members:', style: TextStyle(fontWeight: FontWeight.bold)),
+              const SizedBox(height: 8),
+              ...group.memberUserIds.map((userId) => ListTile(
+                leading: _buildUserAvatar(userId, ref, size: 28),
+                title: Text(_getUserDisplayName(userId)),
+                trailing: isOwner && userId != currentUserId
+                  ? IconButton(
+                      icon: const Icon(Icons.remove_circle, color: Colors.red),
+                      tooltip: 'Remove',
+                      onPressed: () async {
+                        final confirm = await showDialog<bool>(
+                          context: context,
+                          builder: (ctx) => AlertDialog(
+                            title: const Text('Remove Member'),
+                            content: Text('Remove ${_getUserDisplayName(userId)} from the group?'),
+                            actions: [
+                              TextButton(
+                                onPressed: () => Navigator.of(ctx).pop(false),
+                                child: const Text('Cancel'),
+                              ),
+                              TextButton(
+                                onPressed: () => Navigator.of(ctx).pop(true),
+                                child: const Text('Remove', style: TextStyle(color: Colors.red)),
+                              ),
+                            ],
                           ),
-                          // Add Member Button
-                          IconButton(
-                            onPressed: () => _showAddMemberDialog(context, ref, group),
-                            icon: Icon(Icons.person_add, color: Theme.of(context).colorScheme.primary),
-                            tooltip: 'Add Member',
-                            constraints: const BoxConstraints(
-                              minWidth: 32,
-                              minHeight: 32,
-                            ),
-                            padding: EdgeInsets.zero,
+                        );
+                        if (confirm == true) {
+                          final updated = group.copyWith(memberUserIds: List.of(group.memberUserIds)..remove(userId));
+                          ref.read(developerGroupsProvider.notifier).updateGroup(updated);
+                          Navigator.of(context).pop();
+                          _showGroupSettingsDialog(context, ref, updated);
+                        }
+                      },
+                    )
+                  : null,
+              )),
+              const SizedBox(height: 24),
+              Divider(),
+              Center(
+                child: ElevatedButton.icon(
+                  icon: const Icon(Icons.delete_forever, color: Colors.white),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.red,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
+                  ),
+                  label: const Text('Delete Group'),
+                  onPressed: () async {
+                    final confirm = await showDialog<bool>(
+                      context: context,
+                      builder: (ctx) => AlertDialog(
+                        title: const Text('Delete Group'),
+                        content: const Text('Are you sure you want to delete this group? This cannot be undone.'),
+                        actions: [
+                          TextButton(
+                            onPressed: () => Navigator.of(ctx).pop(false),
+                            child: const Text('Cancel'),
+                          ),
+                          TextButton(
+                            onPressed: () => Navigator.of(ctx).pop(true),
+                            child: const Text('Delete', style: TextStyle(color: Colors.red)),
                           ),
                         ],
                       ),
-                      const SizedBox(height: 12),
-                      ...group.memberUserIds.map((userId) => Padding(
-                        padding: const EdgeInsets.only(bottom: 8),
-                        child: Row(
-                          children: [
-                            CircleAvatar(
-                              radius: 16,
-                              backgroundColor: _getUserColor(userId),
-                              child: Text(
-                                _getUserInitials(userId),
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
-                            ),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    _getUserDisplayName(userId),
-                                    style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
-                                  ),
-                                  if (userId == group.memberUserIds.first)
-                                    Text(
-                                      'Owner',
-                                      style: TextStyle(
-                                        fontSize: 11,
-                                        color: Colors.green.shade600,
-                                        fontWeight: FontWeight.w500,
-                                      ),
-                                    ),
-                                ],
-                              ),
-                            ),
-                            // Remove Member Button (only for owner and not for themselves)
-                            if (isOwner && userId != currentUserId)
-                              IconButton(
-                                onPressed: () => _showRemoveMemberDialog(context, ref, group, userId),
-                                icon: Icon(Icons.person_remove, color: Colors.red.shade600, size: 20),
-                                tooltip: 'Remove ${_getUserDisplayName(userId)}',
-                                constraints: const BoxConstraints(
-                                  minWidth: 32,
-                                  minHeight: 32,
-                                ),
-                                padding: EdgeInsets.zero,
-                              ),
-                          ],
-                        ),
-                      )),
-                    ],
-                  ),
+                    );
+                    if (confirm == true) {
+                      await ref.read(firestoreRepositoryProvider).deleteGroup(group.id);
+                      if (context.mounted) {
+                        Navigator.of(context).pop(); // Close settings dialog
+                        context.go('/groups');
+                      }
+                    }
+                  },
                 ),
               ),
             ],
           ),
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Close'),
-          ),
-          ElevatedButton.icon(
-            onPressed: () {
-              Navigator.of(context).pop();
-              context.go('/groups/${group.id}/analysis');
-            },
-            icon: const Icon(Icons.analytics, size: 18),
-            label: const Text('View Analysis'),
-          ),
-        ],
       ),
     );
-  }
+  },
+);
+}
 
   void _showAddMemberDialog(BuildContext context, WidgetRef ref, Group group) {
     final TextEditingController contactController = TextEditingController();
@@ -4616,7 +5266,13 @@ class _AddExpenseDialogState extends ConsumerState<_AddExpenseDialog> {
     } else {
       // Real mode - use Firestore
       return StreamBuilder<List<Group>>(
-        stream: ref.watch(firestoreRepositoryProvider).watchGroups(fb.FirebaseAuth.instance.currentUser!.uid),
+        stream: (() {
+          final currentUser = fb.FirebaseAuth.instance.currentUser;
+          if (currentUser == null) {
+            return Stream.value(<Group>[]);
+          }
+          return ref.watch(firestoreRepositoryProvider).watchGroups(currentUser.uid);
+        })(),
         builder: (context, snap) {
           final groups = snap.data ?? [];
           final currentGroup = groups.firstWhere((g) => g.id == widget.groupId, orElse: () => const Group(id: '', name: '', memberUserIds: [], createdAtMs: 0));
@@ -5211,6 +5867,440 @@ class _JoinGroupScreenState extends ConsumerState<JoinGroupScreen> {
   }
 }
 
+// Settings providers for language and currency
+final languageProvider = NotifierProvider<LanguageNotifier, String>(LanguageNotifier.new);
+final currencyProvider = NotifierProvider<CurrencyNotifier, String>(CurrencyNotifier.new);
+
+class LanguageNotifier extends Notifier<String> {
+  static const String _languageKey = 'app_language';
+  
+  @override
+  String build() {
+    _loadLanguage();
+    return 'en';
+  }
+
+  void setLanguage(String language) {
+    state = language;
+    _saveLanguage(language);
+  }
+  
+  Future<void> _loadLanguage() async {
+    final prefs = await SharedPreferences.getInstance();
+    final savedLanguage = prefs.getString(_languageKey) ?? 'en';
+    state = savedLanguage;
+  }
+  
+  Future<void> _saveLanguage(String language) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_languageKey, language);
+  }
+}
+
+class CurrencyNotifier extends Notifier<String> {
+  static const String _currencyKey = 'app_currency';
+  
+  @override
+  String build() {
+    _loadCurrency();
+    return 'USD';
+  }
+
+  void setCurrency(String currency) {
+    state = currency;
+    _saveCurrency(currency);
+  }
+  
+  Future<void> _loadCurrency() async {
+    final prefs = await SharedPreferences.getInstance();
+    final savedCurrency = prefs.getString(_currencyKey) ?? 'USD';
+    state = savedCurrency;
+  }
+  
+  Future<void> _saveCurrency(String currency) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_currencyKey, currency);
+  }
+}
+
+class SettingsNotifier {
+  static const String _languageKey = 'app_language';
+  static const String _currencyKey = 'app_currency';
+  
+  static Future<String> loadLanguage() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(_languageKey) ?? 'en';
+  }
+  
+  static Future<void> saveLanguage(String language) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_languageKey, language);
+  }
+  
+  static Future<String> loadCurrency() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(_currencyKey) ?? 'USD';
+  }
+  
+  static Future<void> saveCurrency(String currency) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_currencyKey, currency);
+  }
+}
+
+class SettingsScreen extends ConsumerStatefulWidget {
+  const SettingsScreen({super.key});
+
+  @override
+  ConsumerState<SettingsScreen> createState() => _SettingsScreenState();
+}
+
+class _SettingsScreenState extends ConsumerState<SettingsScreen> {
+  static const Map<String, String> languages = {
+    'en': 'English',
+    'es': 'Español',
+    'fr': 'Français', 
+    'de': 'Deutsch',
+    'it': 'Italiano',
+    'pt': 'Português',
+    'sv': 'Svenska',
+    'no': 'Norsk',
+    'da': 'Dansk',
+    'fi': 'Suomi',
+  };
+
+  static const Map<String, String> currencies = {
+    'USD': 'US Dollar (\$)',
+    'EUR': 'Euro (€)',
+    'GBP': 'British Pound (£)',
+    'JPY': 'Japanese Yen (¥)',
+    'CAD': 'Canadian Dollar (C\$)',
+    'AUD': 'Australian Dollar (A\$)',
+    'CHF': 'Swiss Franc (CHF)',
+    'SEK': 'Swedish Krona (kr)',
+    'NOK': 'Norwegian Krone (kr)',
+    'DKK': 'Danish Krone (kr)',
+  };
+
+  String _exchangeRateInfo = '';
+  bool _loadingExchangeRate = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadSettings();
+    _loadExchangeRateInfo();
+  }
+
+  Future<void> _loadExchangeRateInfo() async {
+    setState(() {
+      _loadingExchangeRate = true;
+    });
+    
+    try {
+      final currentCurrency = ref.read(currencyProvider);
+      if (currentCurrency != CurrencyFormatter.baseCurrency) {
+        final rateInfo = await CurrencyFormatter.getExchangeRateInfo(
+          CurrencyFormatter.baseCurrency, 
+          currentCurrency,
+        );
+        setState(() {
+          _exchangeRateInfo = rateInfo;
+          _loadingExchangeRate = false;
+        });
+      } else {
+        setState(() {
+          _exchangeRateInfo = '';
+          _loadingExchangeRate = false;
+        });
+      }
+    } catch (e) {
+      setState(() {
+        _exchangeRateInfo = 'Exchange rate unavailable';
+        _loadingExchangeRate = false;
+      });
+    }
+  }
+
+  Future<void> _loadSettings() async {
+    final language = await SettingsNotifier.loadLanguage();
+    final currency = await SettingsNotifier.loadCurrency();
+    
+    if (mounted) {
+      ref.read(languageProvider.notifier).setLanguage(language);
+      ref.read(currencyProvider.notifier).setCurrency(currency);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final currentLanguage = ref.watch(languageProvider);
+    final currentCurrency = ref.watch(currencyProvider);
+    final themeMode = ref.watch(themeNotifierProvider);
+    
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(AppLocalizations.translate('settings', currentLanguage)),
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          onPressed: () {
+            if (Navigator.canPop(context)) {
+              Navigator.pop(context);
+            } else {
+              context.go('/groups'); // Fallback to groups home page
+            }
+          },
+        ),
+      ),
+      body: Container(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: Theme.of(context).brightness == Brightness.dark
+                ? [
+                    const Color(0xFF1A202C),
+                    const Color(0xFF2D3748),
+                  ]
+                : [
+                    const Color(0xFFF7FAFC),
+                    const Color(0xFFEDF2F7),
+                  ],
+          ),
+        ),
+        child: ListView(
+          padding: const EdgeInsets.all(16),
+          children: [
+            // Profile Section
+            _buildSettingsSection(
+              context,
+              AppLocalizations.translate('profile', currentLanguage),
+              [
+                _buildSettingsTile(
+                  context,
+                  icon: Icons.person,
+                  title: AppLocalizations.translate('edit_profile', currentLanguage),
+                  subtitle: AppLocalizations.translate('manage_your_profile', currentLanguage),
+                  onTap: () => context.go('/profile'),
+                ),
+                _buildSettingsTile(
+                  context,
+                  icon: Icons.people_alt,
+                  title: 'Find Users',
+                  subtitle: 'Search and invite other users',
+                  onTap: () => context.go('/search-users'),
+                ),
+              ],
+            ),
+            
+            const SizedBox(height: 24),
+            
+            // Theme Section
+            _buildSettingsSection(
+              context,
+              AppLocalizations.translate('appearance', currentLanguage),
+              [
+                _buildSettingsTile(
+                  context,
+                  icon: themeMode == ThemeMode.dark ? Icons.dark_mode : Icons.light_mode,
+                  title: AppLocalizations.translate('theme', currentLanguage),
+                  subtitle: AppLocalizations.translate(themeMode == ThemeMode.dark ? 'dark' : 'light', currentLanguage),
+                  onTap: () {
+                    final newMode = themeMode == ThemeMode.dark 
+                        ? ThemeMode.light 
+                        : ThemeMode.dark;
+                    ref.read(themeNotifierProvider.notifier).setThemeMode(newMode);
+                  },
+                ),
+              ],
+            ),
+            
+            const SizedBox(height: 24),
+            
+            // Localization Section
+            _buildSettingsSection(
+              context,
+              AppLocalizations.translate('localization', currentLanguage),
+              [
+                _buildSettingsTile(
+                  context,
+                  icon: Icons.language,
+                  title: AppLocalizations.translate('language', currentLanguage),
+                  subtitle: languages[currentLanguage] ?? 'English',
+                  onTap: () => _showLanguageDialog(context, currentLanguage),
+                ),
+                _buildSettingsTile(
+                  context,
+                  icon: Icons.attach_money,
+                  title: AppLocalizations.translate('currency', currentLanguage),
+                  subtitle: currencies[currentCurrency] ?? 'US Dollar (\$)',
+                  onTap: () => _showCurrencyDialog(context, currentCurrency),
+                ),
+                if (_exchangeRateInfo.isNotEmpty || _loadingExchangeRate)
+                  Padding(
+                    padding: const EdgeInsets.only(left: 56, top: 4),
+                    child: Text(
+                      _loadingExchangeRate ? 'Loading exchange rate...' : _exchangeRateInfo,
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.grey.shade600,
+                        fontStyle: FontStyle.italic,
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+            
+            const SizedBox(height: 24),
+            
+            // App Info Section
+            _buildSettingsSection(
+              context,
+              AppLocalizations.translate('about', currentLanguage),
+              [
+                _buildSettingsTile(
+                  context,
+                  icon: Icons.info_outline,
+                  title: AppLocalizations.translate('app_version', currentLanguage),
+                  subtitle: '1.0.0',
+                  onTap: null,
+                ),
+                _buildSettingsTile(
+                  context,
+                  icon: Icons.privacy_tip_outlined,
+                  title: AppLocalizations.translate('privacy_policy', currentLanguage),
+                  subtitle: AppLocalizations.translate('view_privacy_policy', currentLanguage),
+                  onTap: () {
+                    // TODO: Open privacy policy
+                  },
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSettingsSection(BuildContext context, String title, List<Widget> children) {
+    return Card(
+      elevation: 0,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              title,
+              style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 12),
+            ...children,
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSettingsTile(
+    BuildContext context, {
+    required IconData icon,
+    required String title,
+    required String subtitle,
+    VoidCallback? onTap,
+  }) {
+    return ListTile(
+      leading: Icon(icon, color: Theme.of(context).colorScheme.primary),
+      title: Text(title),
+      subtitle: Text(subtitle),
+      trailing: onTap != null ? const Icon(Icons.chevron_right) : null,
+      onTap: onTap,
+      contentPadding: EdgeInsets.zero,
+    );
+  }
+
+  void _showLanguageDialog(BuildContext context, String currentLanguage) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(AppLocalizations.translate('select_language', currentLanguage)),
+        content: SizedBox(
+          width: double.minPositive,
+          child: ListView.builder(
+            shrinkWrap: true,
+            itemCount: languages.length,
+            itemBuilder: (context, index) {
+              final languageCode = languages.keys.elementAt(index);
+              final languageName = languages.values.elementAt(index);
+              final isSelected = currentLanguage == languageCode;
+              
+              return ListTile(
+                title: Text(languageName),
+                trailing: isSelected ? const Icon(Icons.check, color: Colors.green) : null,
+                onTap: () async {
+                  ref.read(languageProvider.notifier).setLanguage(languageCode);
+                  await SettingsNotifier.saveLanguage(languageCode);
+                  if (mounted) Navigator.of(context).pop();
+                },
+              );
+            },
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: Text(AppLocalizations.translate('cancel', currentLanguage)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showCurrencyDialog(BuildContext context, String currentCurrency) {
+    final currentLanguage = ref.watch(languageProvider);
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(AppLocalizations.translate('select_currency', currentLanguage)),
+        content: SizedBox(
+          width: double.minPositive,
+          child: ListView.builder(
+            shrinkWrap: true,
+            itemCount: currencies.length,
+            itemBuilder: (context, index) {
+              final currencyCode = currencies.keys.elementAt(index);
+              final currencyName = currencies.values.elementAt(index);
+              final isSelected = currentCurrency == currencyCode;
+              
+              return ListTile(
+                title: Text(currencyName),
+                trailing: isSelected ? const Icon(Icons.check, color: Colors.green) : null,
+                onTap: () async {
+                  ref.read(currencyProvider.notifier).setCurrency(currencyCode);
+                  await SettingsNotifier.saveCurrency(currencyCode);
+                  await _loadExchangeRateInfo(); // Refresh exchange rate
+                  if (mounted) Navigator.of(context).pop();
+                },
+              );
+            },
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: Text(AppLocalizations.translate('cancel', currentLanguage)),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class ReceiptScanScreen extends ConsumerStatefulWidget {
   const ReceiptScanScreen({super.key});
 
@@ -5403,33 +6493,139 @@ class GroupAnalysisScreen extends ConsumerWidget {
   
   final String groupId;
 
+  Future<String> _formatCentsWithConversion(int cents, WidgetRef ref) async {
+    final currency = ref.watch(currencyProvider);
+    return await CurrencyFormatter.formatCentsWithConversion(cents, currency);
+  }
+
+  String _formatCents(int cents) {
+    return CurrencyFormatter.formatCents(cents, 'USD'); // Default for now, will be improved later
+  }
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final devMode = ref.watch(developerModeProvider);
     
-    // Get group data
-    final group = devMode 
-      ? ref.watch(developerGroupsProvider).firstWhere(
-          (g) => g.id == groupId,
-          orElse: () => const Group(id: '', name: '', memberUserIds: [], createdAtMs: 0),
-        )
-      : null;
-    
-    // Get expenses data
-    final expenses = devMode 
-      ? ref.watch(developerExpensesProvider(groupId))
-      : <Expense>[];
-
-    if (group == null || group.id.isEmpty) {
-      return Scaffold(
-        appBar: AppBar(
-          title: const Text('Group Analysis'),
-        ),
-        body: const Center(
-          child: Text('Group not found'),
-        ),
+    if (devMode) {
+      // Developer mode - use local data
+      final group = ref.watch(developerGroupsProvider).firstWhere(
+        (g) => g.id == groupId,
+        orElse: () => const Group(id: '', name: '', memberUserIds: [], createdAtMs: 0),
       );
+      final expenses = ref.watch(developerExpensesProvider(groupId));
+      
+      if (group.id.isEmpty) {
+        return Scaffold(
+          appBar: AppBar(title: const Text('Group Analysis')),
+          body: const Center(child: Text('Group not found')),
+        );
+      }
+      
+      return _buildAnalysisScreen(context, ref, group, expenses);
+    } else {
+      // Real user mode - show skeleton first, then load data
+      return _buildLoadingAnalysisScreen(context, ref);
     }
+  }
+
+  Widget _buildLoadingAnalysisScreen(BuildContext context, WidgetRef ref) {
+    return StreamBuilder<Group>(
+      stream: ref.watch(firestoreRepositoryProvider).watchGroup(groupId),
+      builder: (context, groupSnapshot) {
+        // Show skeleton immediately
+        if (groupSnapshot.connectionState == ConnectionState.waiting) {
+          return _buildSkeletonAnalysisScreen(context);
+        }
+        
+        if (groupSnapshot.hasError || !groupSnapshot.hasData) {
+          return Scaffold(
+            appBar: AppBar(title: const Text('Group Analysis')),
+            body: const Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(Icons.error_outline, size: 64, color: Colors.grey),
+                  SizedBox(height: 16),
+                  Text('Group not found or connection timeout'),
+                  SizedBox(height: 8),
+                  Text('Please check your connection and try again', style: TextStyle(color: Colors.grey)),
+                ],
+              ),
+            ),
+          );
+        }
+        
+        final group = groupSnapshot.data!;
+        
+        return StreamBuilder<List<Expense>>(
+          stream: ref.watch(firestoreRepositoryProvider).watchExpenses(groupId),
+          builder: (context, expensesSnapshot) {
+            // Always show the screen with available data, even while loading expenses
+            final expenses = expensesSnapshot.data ?? [];
+            final isLoadingExpenses = expensesSnapshot.connectionState == ConnectionState.waiting;
+            
+            return _buildAnalysisScreen(context, ref, group, expenses, isLoadingExpenses: isLoadingExpenses);
+          },
+        );
+      },
+    );
+  }
+
+  Widget _buildSkeletonAnalysisScreen(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Theme.of(context).colorScheme.surface,
+      appBar: AppBar(
+        title: const Text('Group Analysis'),
+        backgroundColor: Theme.of(context).colorScheme.surface,
+        surfaceTintColor: Colors.transparent,
+        elevation: 0,
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          onPressed: () => context.pop(),
+        ),
+      ),
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Skeleton overview cards
+            Row(
+              children: [
+                Expanded(child: _buildSkeletonCard()),
+                const SizedBox(width: 16),
+                Expanded(child: _buildSkeletonCard()),
+              ],
+            ),
+            const SizedBox(height: 24),
+            
+            // Skeleton member summary
+            _buildSkeletonCard(height: 200),
+            
+            const SizedBox(height: 24),
+            
+            // Skeleton expense breakdown
+            _buildSkeletonCard(height: 300),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSkeletonCard({double height = 120}) {
+    return Container(
+      height: height,
+      decoration: BoxDecoration(
+        color: Colors.grey.shade200,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: const Center(
+        child: CircularProgressIndicator(),
+      ),
+    );
+  }
+
+  Widget _buildAnalysisScreen(BuildContext context, WidgetRef ref, Group group, List<Expense> expenses, {bool isLoadingExpenses = false}) {
 
     return Scaffold(
       backgroundColor: Theme.of(context).colorScheme.surface,
@@ -5449,29 +6645,26 @@ class GroupAnalysisScreen extends ConsumerWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             // Overview Cards
-            _buildOverviewSection(context, group, expenses),
-            
+            _buildOverviewSection(context, group, expenses, ref),
             const SizedBox(height: 24),
-            
             // Member Summary
-            _buildMemberSummarySection(context, group, expenses),
-            
+            _buildMemberSummarySection(context, group, expenses, ref),
             const SizedBox(height: 24),
-            
             // All Expenses Detailed View
-            _buildAllExpensesSection(context, expenses),
-            
+            _buildAllExpensesSection(context, expenses, ref),
             const SizedBox(height: 24),
-            
             // Settlement Recommendations
-            _buildSettlementSection(context, group, expenses),
+            _buildSettlementSection(context, group, expenses, ref),
+            const SizedBox(height: 32),
+            Divider(),
+            // Delete Group button removed from analysis page
           ],
         ),
       ),
     );
   }
   
-  Widget _buildOverviewSection(BuildContext context, Group group, List<Expense> expenses) {
+  Widget _buildOverviewSection(BuildContext context, Group group, List<Expense> expenses, WidgetRef ref) {
     final totalAmount = expenses.fold<int>(0, (sum, expense) => sum + expense.amountCents);
     final activeMembersCount = group.memberUserIds.length;
     final avgPerPerson = activeMembersCount > 0 ? totalAmount / activeMembersCount : 0;
@@ -5512,12 +6705,17 @@ class GroupAnalysisScreen extends ConsumerWidget {
         Row(
           children: [
             Expanded(
-              child: _buildOverviewCard(
-                context,
-                'Total Spent',
-                _formatCents(totalAmount),
-                Icons.attach_money,
-                Colors.green,
+              child: FutureBuilder<String>(
+                future: _formatCentsWithConversion(totalAmount, ref),
+                builder: (context, snapshot) {
+                  return _buildOverviewCard(
+                    context,
+                    'Total Spent',
+                    snapshot.data ?? _formatCents(totalAmount),
+                    Icons.attach_money,
+                    Colors.green,
+                  );
+                },
               ),
             ),
             const SizedBox(width: 12),
@@ -5536,34 +6734,49 @@ class GroupAnalysisScreen extends ConsumerWidget {
         Row(
           children: [
             Expanded(
-              child: _buildOverviewCard(
-                context,
-                'Your Balance',
-                userBalance == 0 
-                  ? 'Even' 
+              child: FutureBuilder<String>(
+                future: userBalance == 0 
+                  ? Future.value('Even')
                   : userBalance > 0 
-                    ? '+${_formatCents(userBalance)}' 
-                    : _formatCents(userBalance),
-                userBalance == 0 
-                  ? Icons.check_circle 
-                  : userBalance > 0 
-                    ? Icons.trending_up 
-                    : Icons.trending_down,
-                userBalance == 0 
-                  ? Colors.green 
-                  : userBalance > 0 
-                    ? Colors.blue 
-                    : Colors.red,
+                    ? _formatCentsWithConversion(userBalance, ref).then((amount) => '+$amount')
+                    : _formatCentsWithConversion(userBalance.abs(), ref).then((amount) => '-$amount'),
+                builder: (context, snapshot) {
+                  final balanceText = userBalance == 0 
+                    ? 'Even' 
+                    : userBalance > 0 
+                      ? '+${_formatCents(userBalance)}' 
+                      : _formatCents(userBalance);
+                  return _buildOverviewCard(
+                    context,
+                    'Your Balance',
+                    snapshot.data ?? balanceText,
+                    userBalance == 0 
+                      ? Icons.check_circle 
+                      : userBalance > 0 
+                        ? Icons.trending_up 
+                        : Icons.trending_down,
+                    userBalance == 0 
+                      ? Colors.green 
+                      : userBalance > 0 
+                        ? Colors.blue 
+                        : Colors.red,
+                  );
+                },
               ),
             ),
             const SizedBox(width: 12),
             Expanded(
-              child: _buildOverviewCard(
-                context,
-                'Avg per Person',
-                _formatCents(avgPerPerson.round()),
-                Icons.person,
-                Colors.purple,
+              child: FutureBuilder<String>(
+                future: _formatCentsWithConversion(avgPerPerson.round(), ref),
+                builder: (context, snapshot) {
+                  return _buildOverviewCard(
+                    context,
+                    'Avg per Person',
+                    snapshot.data ?? _formatCents(avgPerPerson.round()),
+                    Icons.person,
+                    Colors.purple,
+                  );
+                },
               ),
             ),
           ],
@@ -5619,7 +6832,7 @@ class GroupAnalysisScreen extends ConsumerWidget {
     );
   }
   
-  Widget _buildMemberSummarySection(BuildContext context, Group group, List<Expense> expenses) {
+  Widget _buildMemberSummarySection(BuildContext context, Group group, List<Expense> expenses, WidgetRef ref) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -5638,12 +6851,12 @@ class GroupAnalysisScreen extends ConsumerWidget {
           ],
         ),
         const SizedBox(height: 16),
-        ...group.memberUserIds.map((memberId) => _buildMemberCard(context, memberId, expenses)),
+        ...group.memberUserIds.map((memberId) => _buildMemberCard(context, memberId, expenses, ref)),
       ],
     );
   }
   
-  Widget _buildMemberCard(BuildContext context, String memberId, List<Expense> expenses) {
+  Widget _buildMemberCard(BuildContext context, String memberId, List<Expense> expenses, WidgetRef ref) {
     final memberExpenses = expenses.where((e) => e.paidByUserId == memberId).toList();
     final totalPaid = memberExpenses.fold<int>(0, (sum, e) => sum + e.amountCents);
     final totalOwed = expenses.fold<int>(0, (sum, expense) {
@@ -5705,22 +6918,30 @@ class GroupAnalysisScreen extends ConsumerWidget {
                   ],
                 ),
               ),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                decoration: BoxDecoration(
-                  color: netBalance >= 0 ? Colors.green.shade100 : Colors.red.shade100,
-                  borderRadius: BorderRadius.circular(20),
-                ),
-                child: Text(
-                  netBalance >= 0 
+              FutureBuilder<String>(
+                future: netBalance >= 0 
+                  ? _formatCentsWithConversion(netBalance.abs(), ref).then((amount) => '+$amount')
+                  : _formatCentsWithConversion(netBalance.abs(), ref).then((amount) => '-$amount'),
+                builder: (context, snapshot) {
+                  final fallbackText = netBalance >= 0 
                     ? '+${_formatCents(netBalance.abs())}'
-                    : '-${_formatCents(netBalance.abs())}',
-                  style: TextStyle(
-                    color: netBalance >= 0 ? Colors.green.shade800 : Colors.red.shade800,
-                    fontWeight: FontWeight.bold,
-                    fontSize: 16,
-                  ),
-                ),
+                    : '-${_formatCents(netBalance.abs())}';
+                  return Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: netBalance >= 0 ? Colors.green.shade100 : Colors.red.shade100,
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Text(
+                      snapshot.data ?? fallbackText,
+                      style: TextStyle(
+                        color: netBalance >= 0 ? Colors.green.shade800 : Colors.red.shade800,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 16,
+                      ),
+                    ),
+                  );
+                },
               ),
             ],
           ),
@@ -5728,20 +6949,38 @@ class GroupAnalysisScreen extends ConsumerWidget {
           Row(
             children: [
               Expanded(
-                child: _buildMemberStat('Paid', _formatCents(totalPaid), Colors.green),
+                child: FutureBuilder<String>(
+                  future: _formatCentsWithConversion(totalPaid, ref),
+                  builder: (context, snapshot) {
+                    return _buildMemberStat('Paid', snapshot.data ?? _formatCents(totalPaid), Colors.green);
+                  },
+                ),
               ),
               const SizedBox(width: 16),
               Expanded(
-                child: _buildMemberStat('Owes', _formatCents(totalOwed), Colors.orange),
+                child: FutureBuilder<String>(
+                  future: _formatCentsWithConversion(totalOwed, ref),
+                  builder: (context, snapshot) {
+                    return _buildMemberStat('Owes', snapshot.data ?? _formatCents(totalOwed), Colors.orange);
+                  },
+                ),
               ),
               const SizedBox(width: 16),
               Expanded(
-                child: _buildMemberStat(
-                  'Balance', 
-                  netBalance >= 0 
-                    ? '+${_formatCents(netBalance.abs())}'
-                    : '-${_formatCents(netBalance.abs())}',
-                  netBalance >= 0 ? Colors.green : Colors.red,
+                child: FutureBuilder<String>(
+                  future: netBalance >= 0 
+                    ? _formatCentsWithConversion(netBalance.abs(), ref).then((amount) => '+$amount')
+                    : _formatCentsWithConversion(netBalance.abs(), ref).then((amount) => '-$amount'),
+                  builder: (context, snapshot) {
+                    final fallbackText = netBalance >= 0 
+                      ? '+${_formatCents(netBalance.abs())}'
+                      : '-${_formatCents(netBalance.abs())}';
+                    return _buildMemberStat(
+                      'Balance', 
+                      snapshot.data ?? fallbackText,
+                      netBalance >= 0 ? Colors.green : Colors.red,
+                    );
+                  },
                 ),
               ),
             ],
@@ -5773,7 +7012,7 @@ class GroupAnalysisScreen extends ConsumerWidget {
     );
   }
   
-  Widget _buildAllExpensesSection(BuildContext context, List<Expense> expenses) {
+  Widget _buildAllExpensesSection(BuildContext context, List<Expense> expenses, WidgetRef ref) {
     if (expenses.isEmpty) {
       return Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -5825,7 +7064,8 @@ class GroupAnalysisScreen extends ConsumerWidget {
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  'Start adding expenses to see detailed analysis',
+                  'Add your first expense to start tracking and splitting costs with your group',
+                  textAlign: TextAlign.center,
                   style: TextStyle(
                     color: Theme.of(context).colorScheme.onSurfaceVariant.withOpacity(0.7),
                   ),
@@ -5855,12 +7095,12 @@ class GroupAnalysisScreen extends ConsumerWidget {
           ],
         ),
         const SizedBox(height: 16),
-        ...expenses.map((expense) => _buildDetailedExpenseCard(context, expense)),
+        ...expenses.map((expense) => _buildDetailedExpenseCard(context, expense, ref)),
       ],
     );
   }
   
-  Widget _buildDetailedExpenseCard(BuildContext context, Expense expense) {
+  Widget _buildDetailedExpenseCard(BuildContext context, Expense expense, WidgetRef ref) {
     return Container(
       margin: const EdgeInsets.only(bottom: 16),
       padding: const EdgeInsets.all(20),
@@ -5931,13 +7171,18 @@ class GroupAnalysisScreen extends ConsumerWidget {
                     ),
                   ],
                 ),
-                child: Text(
-                  _formatCents(expense.amountCents),
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.bold,
-                    fontSize: 16,
-                  ),
+                child: FutureBuilder<String>(
+                  future: _formatCentsWithConversion(expense.amountCents, ref),
+                  builder: (context, snapshot) {
+                    return Text(
+                      snapshot.data ?? _formatCents(expense.amountCents),
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 16,
+                      ),
+                    );
+                  },
                 ),
               ),
             ],
@@ -5965,7 +7210,7 @@ class GroupAnalysisScreen extends ConsumerWidget {
                   ),
                 ),
                 const SizedBox(height: 12),
-                ...expense.splitUserIds.map((userId) => _buildParticipantRow(context, expense, userId)),
+                ...expense.splitUserIds.map((userId) => _buildParticipantRow(context, expense, userId, ref)),
               ],
             ),
           ),
@@ -5974,7 +7219,7 @@ class GroupAnalysisScreen extends ConsumerWidget {
     );
   }
   
-  Widget _buildParticipantRow(BuildContext context, Expense expense, String userId) {
+  Widget _buildParticipantRow(BuildContext context, Expense expense, String userId, WidgetRef ref) {
     final owedAmount = _getOwedAmount(expense, userId);
     final isPayer = userId == expense.paidByUserId;
     
@@ -6008,15 +7253,20 @@ class GroupAnalysisScreen extends ConsumerWidget {
               ),
             ),
           ),
-          Text(
-            _formatCents(owedAmount),
-            style: TextStyle(
-              fontWeight: FontWeight.w600,
-              color: isPayer 
-                ? Theme.of(context).colorScheme.primary
-                : Theme.of(context).colorScheme.onSurfaceVariant,
-              fontSize: 14,
-            ),
+          FutureBuilder<String>(
+            future: _formatCentsWithConversion(owedAmount, ref),
+            builder: (context, snapshot) {
+              return Text(
+                snapshot.data ?? _formatCents(owedAmount),
+                style: TextStyle(
+                  fontWeight: FontWeight.w600,
+                  color: isPayer 
+                    ? Theme.of(context).colorScheme.primary
+                    : Theme.of(context).colorScheme.onSurfaceVariant,
+                  fontSize: 14,
+                ),
+              );
+            },
           ),
           if (isPayer)
             Container(
@@ -6051,7 +7301,7 @@ class GroupAnalysisScreen extends ConsumerWidget {
     );
   }
   
-  Widget _buildSettlementSection(BuildContext context, Group group, List<Expense> expenses) {
+  Widget _buildSettlementSection(BuildContext context, Group group, List<Expense> expenses, WidgetRef ref) {
     final settlements = _calculateGroupSettlementsDetailed(group, expenses);
     
     // Debug: Print settlement info
@@ -6111,12 +7361,12 @@ class GroupAnalysisScreen extends ConsumerWidget {
             ),
           )
         else
-          ...settlements.map((settlement) => _buildSettlementCard(context, settlement)),
+          ...settlements.map((settlement) => _buildSettlementCard(context, settlement, ref)),
       ],
     );
   }
   
-  Widget _buildSettlementCard(BuildContext context, SettlementInfo settlement) {
+  Widget _buildSettlementCard(BuildContext context, SettlementInfo settlement, WidgetRef ref) {
     final debtorPhone = _getUserPhoneNumber(settlement.debtorId);
     final creditorPhone = _getUserPhoneNumber(settlement.creditorId);
     final canUseSwish = debtorPhone != null && creditorPhone != null;
@@ -6156,13 +7406,18 @@ class GroupAnalysisScreen extends ConsumerWidget {
                       ),
                     ),
                     const SizedBox(height: 4),
-                    Text(
-                      _formatCents(settlement.amount),
-                      style: TextStyle(
-                        fontSize: 20,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.orange.shade900,
-                      ),
+                    FutureBuilder<String>(
+                      future: _formatCentsWithConversion(settlement.amount, ref),
+                      builder: (context, snapshot) {
+                        return Text(
+                          snapshot.data ?? _formatCents(settlement.amount),
+                          style: TextStyle(
+                            fontSize: 20,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.orange.shade900,
+                          ),
+                        );
+                      },
                     ),
                   ],
                 ),
@@ -6330,21 +7585,6 @@ class GroupAnalysisScreen extends ConsumerWidget {
     );
   }
   
-  // Helper function to calculate user's balance in a specific group
-  int _calculateUserBalanceInGroup(Group group, List<Expense> expenses) {
-    final settlements = _calculateGroupSettlementsDetailed(group, expenses);
-    final currentUserId = fb.FirebaseAuth.instance.currentUser?.uid ?? 'dev_user_123';
-    
-    int userBalance = 0;
-    for (final settlement in settlements) {
-      if (settlement.debtorId == currentUserId) {
-        userBalance -= settlement.amount; // User owes money (negative)
-      } else if (settlement.creditorId == currentUserId) {
-        userBalance += settlement.amount; // User is owed money (positive)
-      }
-    }
-    return userBalance;
-  }
   
   List<SettlementInfo> _calculateGroupSettlementsDetailed(Group group, List<Expense> expenses) {
     final balances = <String, int>{};

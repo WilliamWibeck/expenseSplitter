@@ -7,28 +7,69 @@ import '../models/settlement.dart';
 class FirestoreRepository {
   FirestoreRepository(this._db);
   final FirebaseFirestore _db;
+  
+  // Local cache for groups to handle connection issues
+  static List<Group> _cachedGroups = [];
+  static String? _cachedUserId;
 
   // Groups
   Stream<Group> watchGroup(String groupId) {
     return _db.collection('groups').doc(groupId).snapshots().map((d) => Group.fromDoc(d.id, d.data() ?? {}));
   }
   Stream<List<Group>> watchGroups(String userId) {
+    print('Setting up groups stream for user: $userId');
     return _db
         .collection('groups')
         .where('memberUserIds', arrayContains: userId)
         .orderBy('createdAtMs', descending: true)
         .snapshots()
-        .map((snap) => snap.docs.map((d) => Group.fromDoc(d.id, d.data())).toList());
+        .map((snap) {
+          final groups = snap.docs.map((d) => Group.fromDoc(d.id, d.data())).toList();
+          print('Groups stream updated: ${groups.length} groups found');
+          if (groups.isNotEmpty) {
+            print('Group names: ${groups.map((g) => g.name).join(', ')}');
+            // Update cache when we get data successfully
+            _cachedGroups = groups;
+            _cachedUserId = userId;
+          }
+          return groups;
+        })
+        .handleError((error) {
+          print('Groups stream error: $error');
+          // Return cached groups if available for this user
+          if (_cachedUserId == userId && _cachedGroups.isNotEmpty) {
+            print('Returning ${_cachedGroups.length} cached groups due to connection error');
+            return _cachedGroups;
+          }
+          return <Group>[];
+        });
   }
 
   Future<String> createGroup({required String name, required List<String> memberUserIds}) async {
     final shareCode = _generateShareCode();
+    final currentTime = DateTime.now().millisecondsSinceEpoch;
     final doc = await _db.collection('groups').add({
       'name': name,
       'memberUserIds': memberUserIds,
-      'createdAtMs': DateTime.now().millisecondsSinceEpoch,
+      'createdAtMs': currentTime,
       'shareCode': shareCode,
     });
+    
+    // Add to cache immediately for better UX
+    final newGroup = Group(
+      id: doc.id,
+      name: name,
+      memberUserIds: memberUserIds,
+      createdAtMs: currentTime,
+      shareCode: shareCode,
+    );
+    
+    // Update cache if it's for the same user
+    if (memberUserIds.length == 1 && _cachedUserId == memberUserIds.first) {
+      _cachedGroups = [newGroup, ..._cachedGroups];
+      print('Added new group to cache: $name');
+    }
+    
     return doc.id;
   }
 

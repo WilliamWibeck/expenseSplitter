@@ -3,9 +3,8 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:riverpod/riverpod.dart';
 import 'package:firebase_auth/firebase_auth.dart' as fb;
-import 'package:google_sign_in/google_sign_in.dart' hide GoogleSignIn; // avoid web build issues
+// avoid web build issues
 import 'package:sign_in_with_apple/sign_in_with_apple.dart';
-import 'package:flutter/material.dart' show debugPrint; 
 // Conditional imports for Google Sign-In
 import 'google_signin_stub.dart' if (dart.library.html) 'google_signin_web.dart' if (dart.library.io) 'google_signin_mobile.dart';
 
