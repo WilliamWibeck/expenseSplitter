@@ -1,32 +1,34 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:math';
+
+import 'package:firebase_auth/firebase_auth.dart' as fb;
+import 'package:firebase_auth/firebase_auth.dart' show User;
+import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import 'package:velocity_x/velocity_x.dart';
-import 'auth/auth_repository.dart';
-import 'package:firebase_core/firebase_core.dart';
-import 'package:firebase_auth/firebase_auth.dart' as fb;
-import 'package:firebase_auth/firebase_auth.dart' show User;
-import 'firebase_options.dart';
-import 'data/firestore_repository.dart';
-import 'models/group.dart';
-import 'models/expense.dart';
-import 'models/user_profile.dart';
-import 'data/user_profile_repository.dart';
-import 'screens/user_profile_screen.dart';
-import 'screens/user_search_screen.dart';
-
+import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
+import 'package:http/http.dart' as http;
 // Developer mode data providers
 import 'package:image_picker/image_picker.dart';
-import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
-import 'notifications/notifications_service.dart';
+import 'package:qr_flutter/qr_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:velocity_x/velocity_x.dart';
+
+import 'auth/auth_repository.dart';
+import 'data/firestore_repository.dart';
+import 'data/user_profile_repository.dart';
+import 'firebase_options.dart';
+import 'models/expense.dart';
+import 'models/group.dart';
+import 'models/user_profile.dart';
+import 'notifications/notifications_service.dart';
+import 'screens/user_profile_screen.dart';
+import 'screens/user_search_screen.dart';
 import 'services/swish_return_detector.dart';
-import 'dart:convert';
-import 'package:http/http.dart' as http;
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -43,7 +45,7 @@ Future<void> main() async {
 
 class ThemeNotifier extends Notifier<ThemeMode> {
   static const String _themeKey = 'theme_mode';
-  
+
   @override
   ThemeMode build() {
     _loadTheme();
@@ -54,7 +56,7 @@ class ThemeNotifier extends Notifier<ThemeMode> {
     state = mode;
     _saveTheme(mode);
   }
-  
+
   Future<void> _loadTheme() async {
     final prefs = await SharedPreferences.getInstance();
     final themeIndex = prefs.getInt(_themeKey);
@@ -62,14 +64,16 @@ class ThemeNotifier extends Notifier<ThemeMode> {
       state = ThemeMode.values[themeIndex];
     }
   }
-  
+
   Future<void> _saveTheme(ThemeMode mode) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setInt(_themeKey, mode.index);
   }
 }
 
-final themeNotifierProvider = NotifierProvider<ThemeNotifier, ThemeMode>(ThemeNotifier.new);
+final themeNotifierProvider = NotifierProvider<ThemeNotifier, ThemeMode>(
+  ThemeNotifier.new,
+);
 
 // Simple auth state provider
 final authStateProvider = StreamProvider<User?>((ref) {
@@ -80,13 +84,15 @@ final authStateProvider = StreamProvider<User?>((ref) {
 class DeveloperModeNotifier extends Notifier<bool> {
   @override
   bool build() => false;
-  
+
   void setDeveloperMode(bool value) {
     state = value;
   }
 }
 
-final developerModeProvider = NotifierProvider<DeveloperModeNotifier, bool>(DeveloperModeNotifier.new);
+final developerModeProvider = NotifierProvider<DeveloperModeNotifier, bool>(
+  DeveloperModeNotifier.new,
+);
 
 // Developer groups notifier - mutable for adding groups
 class DeveloperGroupsNotifier extends Notifier<List<Group>> {
@@ -94,45 +100,59 @@ class DeveloperGroupsNotifier extends Notifier<List<Group>> {
   List<Group> build() {
     final devMode = ref.watch(developerModeProvider);
     if (!devMode) return [];
-    
+
     return [
       Group(
         id: 'dev_group_1',
         name: 'Trip to Tokyo',
-        memberUserIds: ['dev_user_123', 'user_alice', 'user_bob', 'user_charlie'],
-        createdAtMs: DateTime.now().subtract(const Duration(days: 2)).millisecondsSinceEpoch,
+        memberUserIds: [
+          'dev_user_123',
+          'user_alice',
+          'user_bob',
+          'user_charlie',
+        ],
+        createdAtMs: DateTime.now()
+            .subtract(const Duration(days: 2))
+            .millisecondsSinceEpoch,
         shareCode: '123456',
       ),
       Group(
-        id: 'dev_group_2', 
+        id: 'dev_group_2',
         name: 'Dinner with Friends',
         memberUserIds: ['dev_user_123', 'user_david', 'user_eve'],
-        createdAtMs: DateTime.now().subtract(const Duration(days: 1)).millisecondsSinceEpoch,
+        createdAtMs: DateTime.now()
+            .subtract(const Duration(days: 1))
+            .millisecondsSinceEpoch,
         shareCode: '234567',
       ),
       Group(
         id: 'dev_group_3',
-        name: 'Office Lunch', 
+        name: 'Office Lunch',
         memberUserIds: ['dev_user_123', 'user_frank', 'user_grace'],
-        createdAtMs: DateTime.now().subtract(const Duration(hours: 6)).millisecondsSinceEpoch,
+        createdAtMs: DateTime.now()
+            .subtract(const Duration(hours: 6))
+            .millisecondsSinceEpoch,
         shareCode: '345678',
       ),
     ];
   }
-  
+
   void addGroup(Group group) {
     state = [...state, group];
   }
-  
+
   void updateGroup(Group updatedGroup) {
     state = [
       for (final group in state)
-        if (group.id == updatedGroup.id) updatedGroup else group
+        if (group.id == updatedGroup.id) updatedGroup else group,
     ];
   }
 }
 
-final developerGroupsProvider = NotifierProvider<DeveloperGroupsNotifier, List<Group>>(DeveloperGroupsNotifier.new);
+final developerGroupsProvider =
+    NotifierProvider<DeveloperGroupsNotifier, List<Group>>(
+      DeveloperGroupsNotifier.new,
+    );
 
 // Developer user profiles provider - mutable state
 class DeveloperUserProfilesNotifier extends Notifier<Map<String, UserProfile>> {
@@ -144,8 +164,10 @@ class DeveloperUserProfilesNotifier extends Notifier<Map<String, UserProfile>> {
         displayName: 'You (Developer)',
         email: 'developer@example.com',
         phoneNumber: '+46701234567',
-        bio: 'App developer testing the expense splitter',
-        createdAtMs: DateTime.now().subtract(const Duration(days: 30)).millisecondsSinceEpoch,
+        bio: 'Creator of dela – making expense splitting delightful!',
+        createdAtMs: DateTime.now()
+            .subtract(const Duration(days: 30))
+            .millisecondsSinceEpoch,
         updatedAtMs: DateTime.now().millisecondsSinceEpoch,
         preferences: {
           'notifications': true,
@@ -159,23 +181,35 @@ class DeveloperUserProfilesNotifier extends Notifier<Map<String, UserProfile>> {
         email: 'alice@example.com',
         phoneNumber: '+46701234568',
         bio: 'Loves traveling and good food',
-        createdAtMs: DateTime.now().subtract(const Duration(days: 15)).millisecondsSinceEpoch,
-        updatedAtMs: DateTime.now().subtract(const Duration(days: 2)).millisecondsSinceEpoch,
+        createdAtMs: DateTime.now()
+            .subtract(const Duration(days: 15))
+            .millisecondsSinceEpoch,
+        updatedAtMs: DateTime.now()
+            .subtract(const Duration(days: 2))
+            .millisecondsSinceEpoch,
       ),
       'user_bob': UserProfile(
         id: 'user_bob',
         displayName: 'Bob Smith',
         email: 'bob@example.com',
         phoneNumber: '+46701234569',
-        createdAtMs: DateTime.now().subtract(const Duration(days: 10)).millisecondsSinceEpoch,
-        updatedAtMs: DateTime.now().subtract(const Duration(days: 1)).millisecondsSinceEpoch,
+        createdAtMs: DateTime.now()
+            .subtract(const Duration(days: 10))
+            .millisecondsSinceEpoch,
+        updatedAtMs: DateTime.now()
+            .subtract(const Duration(days: 1))
+            .millisecondsSinceEpoch,
       ),
       'user_charlie': UserProfile(
         id: 'user_charlie',
         displayName: 'Charlie Brown',
         email: 'charlie@example.com',
-        createdAtMs: DateTime.now().subtract(const Duration(days: 8)).millisecondsSinceEpoch,
-        updatedAtMs: DateTime.now().subtract(const Duration(days: 3)).millisecondsSinceEpoch,
+        createdAtMs: DateTime.now()
+            .subtract(const Duration(days: 8))
+            .millisecondsSinceEpoch,
+        updatedAtMs: DateTime.now()
+            .subtract(const Duration(days: 3))
+            .millisecondsSinceEpoch,
       ),
       'user_david': UserProfile(
         id: 'user_david',
@@ -183,35 +217,42 @@ class DeveloperUserProfilesNotifier extends Notifier<Map<String, UserProfile>> {
         email: 'david@example.com',
         phoneNumber: '+46701234570',
         bio: 'Pizza enthusiast',
-        createdAtMs: DateTime.now().subtract(const Duration(days: 5)).millisecondsSinceEpoch,
+        createdAtMs: DateTime.now()
+            .subtract(const Duration(days: 5))
+            .millisecondsSinceEpoch,
         updatedAtMs: DateTime.now().millisecondsSinceEpoch,
       ),
       'user_eve': UserProfile(
         id: 'user_eve',
         displayName: 'Eve Davis',
         email: 'eve@example.com',
-        createdAtMs: DateTime.now().subtract(const Duration(days: 3)).millisecondsSinceEpoch,
-        updatedAtMs: DateTime.now().subtract(const Duration(hours: 12)).millisecondsSinceEpoch,
+        createdAtMs: DateTime.now()
+            .subtract(const Duration(days: 3))
+            .millisecondsSinceEpoch,
+        updatedAtMs: DateTime.now()
+            .subtract(const Duration(hours: 12))
+            .millisecondsSinceEpoch,
       ),
     };
   }
 
   void updateProfile(UserProfile profile) {
-    state = {
-      ...state,
-      profile.id: profile,
-    };
+    state = {...state, profile.id: profile};
   }
 }
 
-final developerUserProfilesProvider = NotifierProvider<DeveloperUserProfilesNotifier, Map<String, UserProfile>>(
-  DeveloperUserProfilesNotifier.new,
-);
+final developerUserProfilesProvider =
+    NotifierProvider<DeveloperUserProfilesNotifier, Map<String, UserProfile>>(
+      DeveloperUserProfilesNotifier.new,
+    );
 
 // Get user profile by ID (works with both dev and real data)
-final userProfileByIdProvider = Provider.family<UserProfile?, String>((ref, userId) {
+final userProfileByIdProvider = Provider.family<UserProfile?, String>((
+  ref,
+  userId,
+) {
   final devMode = ref.watch(developerModeProvider);
-  
+
   if (devMode) {
     final devProfiles = ref.watch(developerUserProfilesProvider);
     return devProfiles[userId];
@@ -225,10 +266,13 @@ final userProfileByIdProvider = Provider.family<UserProfile?, String>((ref, user
 final Map<String, List<Expense>> _developerExpensesMap = {};
 
 // Developer expenses provider - simple provider that uses the map
-final developerExpensesProvider = Provider.family<List<Expense>, String>((ref, groupId) {
+final developerExpensesProvider = Provider.family<List<Expense>, String>((
+  ref,
+  groupId,
+) {
   final devMode = ref.watch(developerModeProvider);
   if (!devMode) return [];
-  
+
   // Initialize with default data if not present
   if (!_developerExpensesMap.containsKey(groupId)) {
     switch (groupId) {
@@ -241,7 +285,9 @@ final developerExpensesProvider = Provider.family<List<Expense>, String>((ref, g
             amountCents: 45000,
             paidByUserId: 'dev_user_123',
             splitUserIds: ['dev_user_123', 'user_alice', 'user_bob'],
-            createdAtMs: DateTime.now().subtract(const Duration(days: 2)).millisecondsSinceEpoch,
+            createdAtMs: DateTime.now()
+                .subtract(const Duration(days: 2))
+                .millisecondsSinceEpoch,
             splitMode: SplitMode.equal,
           ),
           Expense(
@@ -250,8 +296,15 @@ final developerExpensesProvider = Provider.family<List<Expense>, String>((ref, g
             description: 'Sushi dinner',
             amountCents: 12000,
             paidByUserId: 'user_alice',
-            splitUserIds: ['dev_user_123', 'user_alice', 'user_bob', 'user_charlie'],
-            createdAtMs: DateTime.now().subtract(const Duration(days: 1)).millisecondsSinceEpoch,
+            splitUserIds: [
+              'dev_user_123',
+              'user_alice',
+              'user_bob',
+              'user_charlie',
+            ],
+            createdAtMs: DateTime.now()
+                .subtract(const Duration(days: 1))
+                .millisecondsSinceEpoch,
             splitMode: SplitMode.equal,
           ),
           Expense(
@@ -261,7 +314,9 @@ final developerExpensesProvider = Provider.family<List<Expense>, String>((ref, g
             amountCents: 8500,
             paidByUserId: 'user_bob',
             splitUserIds: ['dev_user_123', 'user_alice', 'user_bob'],
-            createdAtMs: DateTime.now().subtract(const Duration(hours: 6)).millisecondsSinceEpoch,
+            createdAtMs: DateTime.now()
+                .subtract(const Duration(hours: 6))
+                .millisecondsSinceEpoch,
             splitMode: SplitMode.custom,
             customAmounts: {
               'dev_user_123': 3000,
@@ -280,7 +335,9 @@ final developerExpensesProvider = Provider.family<List<Expense>, String>((ref, g
             amountCents: 6500,
             paidByUserId: 'dev_user_123',
             splitUserIds: ['dev_user_123', 'user_david', 'user_eve'],
-            createdAtMs: DateTime.now().subtract(const Duration(hours: 3)).millisecondsSinceEpoch,
+            createdAtMs: DateTime.now()
+                .subtract(const Duration(hours: 3))
+                .millisecondsSinceEpoch,
             splitMode: SplitMode.percent,
             percentages: {
               'dev_user_123': 0.4,
@@ -299,7 +356,9 @@ final developerExpensesProvider = Provider.family<List<Expense>, String>((ref, g
             amountCents: 3200,
             paidByUserId: 'user_frank',
             splitUserIds: ['dev_user_123', 'user_frank', 'user_grace'],
-            createdAtMs: DateTime.now().subtract(const Duration(hours: 1)).millisecondsSinceEpoch,
+            createdAtMs: DateTime.now()
+                .subtract(const Duration(hours: 1))
+                .millisecondsSinceEpoch,
             splitMode: SplitMode.equal,
           ),
         ];
@@ -308,7 +367,7 @@ final developerExpensesProvider = Provider.family<List<Expense>, String>((ref, g
         _developerExpensesMap[groupId] = [];
     }
   }
-  
+
   return _developerExpensesMap[groupId] ?? [];
 });
 
@@ -326,27 +385,32 @@ void addDeveloperExpense(String groupId, Expense expense) {
     customAmounts: expense.customAmounts,
     percentages: expense.percentages,
   );
-  
+
   _developerExpensesMap[groupId] ??= [];
   _developerExpensesMap[groupId]!.add(newExpense);
 }
 
 // Helper function to remove expense from developer data
 void removeDeveloperExpense(String groupId, String expenseId) {
-  _developerExpensesMap[groupId]?.removeWhere((expense) => expense.id == expenseId);
+  _developerExpensesMap[groupId]?.removeWhere(
+    (expense) => expense.id == expenseId,
+  );
 }
 
 // Cached expenses provider to avoid multiple Firestore queries
-final expensesProvider = StreamProvider.family<List<Expense>, String>((ref, groupId) {
+final expensesProvider = StreamProvider.family<List<Expense>, String>((
+  ref,
+  groupId,
+) {
   final repo = ref.watch(firestoreRepositoryProvider);
   final devMode = ref.watch(developerModeProvider);
-  
+
   // For developer mode, use developer expenses provider
   if (devMode) {
     final devExpenses = ref.watch(developerExpensesProvider(groupId));
     return Stream.value(devExpenses);
   }
-  
+
   return repo.watchExpenses(groupId);
 });
 
@@ -377,15 +441,25 @@ String _getUserDisplayName(String userId) {
         return 'User $phoneDigits'; // Show as "User 1234" for phone invites
       } else if (userId.startsWith('user_email_')) {
         final emailUser = userId.substring(11); // Remove 'user_email_' prefix
-        return emailUser.split('.').map((part) => 
-          part.isEmpty ? '' : '${part[0].toUpperCase()}${part.substring(1)}'
-        ).join(' '); // Convert "john.doe" to "John Doe"
+        return emailUser
+            .split('.')
+            .map(
+              (part) => part.isEmpty
+                  ? ''
+                  : '${part[0].toUpperCase()}${part.substring(1)}',
+            )
+            .join(' '); // Convert "john.doe" to "John Doe"
       } else if (userId.startsWith('user_')) {
         // Legacy support for old name-based users
         final name = userId.substring(5); // Remove 'user_' prefix
-        return name.split('_').map((word) => 
-          word.isEmpty ? '' : '${word[0].toUpperCase()}${word.substring(1)}'
-        ).join(' ');
+        return name
+            .split('_')
+            .map(
+              (word) => word.isEmpty
+                  ? ''
+                  : '${word[0].toUpperCase()}${word.substring(1)}',
+            )
+            .join(' ');
       }
       // For real users with Firebase UIDs, try to show a friendlier name
       if (userId.length > 10) {
@@ -399,15 +473,16 @@ String _getUserDisplayName(String userId) {
 String getUserDisplayNameFromProfile(String userId, WidgetRef ref) {
   final devMode = ref.watch(developerModeProvider);
   final currentUser = ref.watch(currentUserProvider);
-  
+
   // Check if this is the current user
   if (currentUser != null && userId == currentUser.uid) {
     // Use the current user's display name from authentication
-    if (currentUser.displayName != null && currentUser.displayName!.isNotEmpty) {
+    if (currentUser.displayName != null &&
+        currentUser.displayName!.isNotEmpty) {
       return devMode ? 'You (${currentUser.displayName})' : 'You';
     }
   }
-  
+
   final userProfile = ref.watch(userProfileByIdProvider(userId));
   if (userProfile != null) {
     return userId == 'dev_user_123' ? 'You' : userProfile.displayName;
@@ -442,7 +517,7 @@ String? _getUserPhoneNumber(String userId) {
 // Helper class for greedy debt settlement algorithm
 class _PersonBalance {
   _PersonBalance(this.personId, this.amount);
-  
+
   final String personId;
   int amount;
 }
@@ -450,7 +525,7 @@ class _PersonBalance {
 // Helper class for overall balance calculation
 class _OverallBalance {
   _OverallBalance({required this.youOwe, required this.owedToYou});
-  
+
   final int youOwe;
   final int owedToYou;
 }
@@ -458,11 +533,11 @@ class _OverallBalance {
 // Greedy algorithm for optimal debt settlement
 List<SettlementInfo> _greedyDebtSettlement(Map<String, int> balances) {
   final settlements = <SettlementInfo>[];
-  
+
   // Create lists of creditors and debtors with their amounts
   final creditors = <_PersonBalance>[];
   final debtors = <_PersonBalance>[];
-  
+
   balances.forEach((memberId, balance) {
     if (balance > 0) {
       creditors.add(_PersonBalance(memberId, balance));
@@ -470,30 +545,34 @@ List<SettlementInfo> _greedyDebtSettlement(Map<String, int> balances) {
       debtors.add(_PersonBalance(memberId, balance.abs()));
     }
   });
-  
+
   // Sort by amount descending (greedy: settle largest amounts first)
   creditors.sort((a, b) => b.amount.compareTo(a.amount));
   debtors.sort((a, b) => b.amount.compareTo(a.amount));
-  
+
   // Greedy algorithm: match largest creditor with largest debtor
   while (creditors.isNotEmpty && debtors.isNotEmpty) {
     final creditor = creditors.first;
     final debtor = debtors.first;
-    
+
     // Determine settlement amount (minimum of what creditor is owed and what debtor owes)
-    final settlementAmount = creditor.amount < debtor.amount ? creditor.amount : debtor.amount;
-    
+    final settlementAmount = creditor.amount < debtor.amount
+        ? creditor.amount
+        : debtor.amount;
+
     // Create settlement
-    settlements.add(SettlementInfo(
-      debtorId: debtor.personId,
-      creditorId: creditor.personId,
-      amount: settlementAmount,
-    ));
-    
+    settlements.add(
+      SettlementInfo(
+        debtorId: debtor.personId,
+        creditorId: creditor.personId,
+        amount: settlementAmount,
+      ),
+    );
+
     // Update amounts
     creditor.amount -= settlementAmount;
     debtor.amount -= settlementAmount;
-    
+
     // Remove if fully settled
     if (creditor.amount == 0) {
       creditors.removeAt(0);
@@ -501,7 +580,7 @@ List<SettlementInfo> _greedyDebtSettlement(Map<String, int> balances) {
     if (debtor.amount == 0) {
       debtors.removeAt(0);
     }
-    
+
     // Re-sort if amounts changed (maintain greedy property)
     if (creditors.length > 1) {
       creditors.sort((a, b) => b.amount.compareTo(a.amount));
@@ -510,7 +589,7 @@ List<SettlementInfo> _greedyDebtSettlement(Map<String, int> balances) {
       debtors.sort((a, b) => b.amount.compareTo(a.amount));
     }
   }
-  
+
   return settlements;
 }
 
@@ -522,9 +601,9 @@ String _generateSwishDeepLink({
 }) {
   final amountKronor = (amountCents / 100).toStringAsFixed(2);
   String phoneNumber = recipientPhoneNumber;
-  
+
   print('🔍 DEBUG: Original phone: $recipientPhoneNumber');
-  
+
   if (phoneNumber.startsWith('+46')) {
     phoneNumber = phoneNumber.substring(3);
   }
@@ -532,36 +611,37 @@ String _generateSwishDeepLink({
     phoneNumber = phoneNumber.substring(1);
   }
   phoneNumber = '46$phoneNumber'.replaceAll(RegExp(r'[\s-]'), '');
-  
+
   print('🔍 DEBUG: Formatted phone: $phoneNumber');
   print('🔍 DEBUG: Amount: $amountKronor SEK');
   print('🔍 DEBUG: Message: $message');
-  
+
   // Use the working web-based Swish payment URL format
   final encodedMessage = Uri.encodeComponent(message);
-  final webSwishUrl = 'https://app.swish.nu/1/p/sw/?sw=$phoneNumber&amt=$amountKronor&msg=$encodedMessage';
-  
+  final webSwishUrl =
+      'https://app.swish.nu/1/p/sw/?sw=$phoneNumber&amt=$amountKronor&msg=$encodedMessage';
+
   print('🔍 DEBUG: Generated payment URL: $webSwishUrl');
-  
+
   return webSwishUrl;
 }
 
 void _launchSwishPayment(String swishUrl) async {
   print('🚀 LAUNCHING SWISH with URL: $swishUrl');
-  
+
   try {
     final uri = Uri.parse(swishUrl);
     print('🔍 Parsed URI scheme: ${uri.scheme}');
     print('🔍 Parsed URI host: ${uri.host}');
     print('🔍 Parsed URI query: ${uri.query}');
     print('🔍 Parsed URI queryParameters: ${uri.queryParameters}');
-    
+
     // Try the primary URL first
     bool success = false;
     print('🔍 Checking if URL can be launched...');
     if (await canLaunchUrl(uri)) {
       print('✅ URL can be launched, attempting launch...');
-      
+
       // For HTTPS URLs, try opening in external application first (to trigger Swish app)
       if (uri.scheme == 'https') {
         success = await launchUrl(uri, mode: LaunchMode.externalApplication);
@@ -574,7 +654,7 @@ void _launchSwishPayment(String swishUrl) async {
         // For swish:// scheme, use external application mode
         success = await launchUrl(uri, mode: LaunchMode.externalApplication);
       }
-      
+
       if (success) {
         print('✅ Swish URL launched successfully');
         return;
@@ -584,34 +664,41 @@ void _launchSwishPayment(String swishUrl) async {
     } else {
       print('❌ URL cannot be launched');
     }
-    
+
     // If primary fails, try alternative URL formats
     print('Primary URL failed, trying alternatives...');
-    
+
     // Extract phone and amount from the original URL for fallbacks
     final originalUri = Uri.parse(swishUrl);
-    final phone = originalUri.queryParameters['phone'] ?? originalUri.queryParameters['sw'];
-    final amount = originalUri.queryParameters['amount'] ?? originalUri.queryParameters['amt'];
-    
+    final phone =
+        originalUri.queryParameters['phone'] ??
+        originalUri.queryParameters['sw'];
+    final amount =
+        originalUri.queryParameters['amount'] ??
+        originalUri.queryParameters['amt'];
+
     // Alternative formats to try (both web and app schemes)
     final alternatives = [
-      'https://app.swish.nu/1/p/sw/?sw=$phone&amt=$amount',  // Web payment format without message
-      'https://app.swish.nu/1/r/sw/?sw=$phone&amt=$amount',  // Web request format without message
-      'swish://payment?phone=$phone&amount=$amount',        // Basic app scheme
-      'swish://request?phone=$phone&amount=$amount',        // App request scheme
-      'swish://payment?number=$phone&amount=$amount',       // Alternative parameter names
-      'swish://send?phone=$phone&amount=$amount',           // Different action
-      'swish://transfer?phone=$phone&amount=$amount',       // Transfer instead of payment
-      'swish://pay?phone=$phone&amount=$amount',            // Pay action
-      'swish://?phone=$phone&amount=$amount',               // No specific action
+      'https://app.swish.nu/1/p/sw/?sw=$phone&amt=$amount', // Web payment format without message
+      'https://app.swish.nu/1/r/sw/?sw=$phone&amt=$amount', // Web request format without message
+      'swish://payment?phone=$phone&amount=$amount', // Basic app scheme
+      'swish://request?phone=$phone&amount=$amount', // App request scheme
+      'swish://payment?number=$phone&amount=$amount', // Alternative parameter names
+      'swish://send?phone=$phone&amount=$amount', // Different action
+      'swish://transfer?phone=$phone&amount=$amount', // Transfer instead of payment
+      'swish://pay?phone=$phone&amount=$amount', // Pay action
+      'swish://?phone=$phone&amount=$amount', // No specific action
     ];
-    
+
     for (final altUrl in alternatives) {
       try {
         final altUri = Uri.parse(altUrl);
         print('Trying alternative: $altUrl');
         if (await canLaunchUrl(altUri)) {
-          success = await launchUrl(altUri, mode: LaunchMode.externalApplication);
+          success = await launchUrl(
+            altUri,
+            mode: LaunchMode.externalApplication,
+          );
           if (success) {
             print('Alternative Swish URL launched successfully: $altUrl');
             return;
@@ -621,7 +708,7 @@ void _launchSwishPayment(String swishUrl) async {
         print('Alternative failed: $e');
       }
     }
-    
+
     // Final fallback: just open Swish app
     print('All alternatives failed, opening Swish app directly...');
     final fallbackUri = Uri.parse('swish://');
@@ -631,7 +718,6 @@ void _launchSwishPayment(String swishUrl) async {
     } else {
       print('Cannot open Swish app. Make sure Swish is installed.');
     }
-    
   } catch (e) {
     print('Error launching Swish: $e');
   }
@@ -641,7 +727,7 @@ String _formatDate(int timestampMs) {
   final date = DateTime.fromMillisecondsSinceEpoch(timestampMs);
   final now = DateTime.now();
   final difference = now.difference(date);
-  
+
   if (difference.inDays > 0) {
     return '${difference.inDays}d ago';
   } else if (difference.inHours > 0) {
@@ -660,22 +746,22 @@ class CurrencyConversionService {
   static const String _cacheKey = 'exchange_rates_cache';
   static const String _cacheTimeKey = 'exchange_rates_cache_time';
   static const Duration _cacheExpiry = Duration(hours: 1); // Cache for 1 hour
-  
+
   static Map<String, double>? _cachedRates;
   static DateTime? _cacheTime;
-  
+
   // Fallback exchange rates (approximate) - used when API is unavailable
   static const Map<String, double> _fallbackRates = {
-    'USD': 1.0,      // Base currency
-    'EUR': 0.85,     // Euro
-    'GBP': 0.73,     // British Pound
-    'JPY': 110.0,    // Japanese Yen
-    'CAD': 1.25,     // Canadian Dollar
-    'AUD': 1.35,     // Australian Dollar
-    'CHF': 0.92,     // Swiss Franc
-    'SEK': 8.5,      // Swedish Krona
-    'NOK': 8.8,      // Norwegian Krone
-    'DKK': 6.4,      // Danish Krone
+    'USD': 1.0, // Base currency
+    'EUR': 0.85, // Euro
+    'GBP': 0.73, // British Pound
+    'JPY': 110.0, // Japanese Yen
+    'CAD': 1.25, // Canadian Dollar
+    'AUD': 1.35, // Australian Dollar
+    'CHF': 0.92, // Swiss Franc
+    'SEK': 8.5, // Swedish Krona
+    'NOK': 8.8, // Norwegian Krone
+    'DKK': 6.4, // Danish Krone
   };
 
   static Future<Map<String, double>> getExchangeRates() async {
@@ -691,42 +777,50 @@ class CurrencyConversionService {
       final prefs = await SharedPreferences.getInstance();
       final cachedData = prefs.getString(_cacheKey);
       final cacheTimeStr = prefs.getString(_cacheTimeKey);
-      
+
       if (cachedData != null && cacheTimeStr != null) {
         final cacheTime = DateTime.parse(cacheTimeStr);
         if (DateTime.now().difference(cacheTime) < _cacheExpiry) {
           final Map<String, dynamic> decoded = json.decode(cachedData);
-          _cachedRates = decoded.map((key, value) => MapEntry(key, value.toDouble()));
+          _cachedRates = decoded.map(
+            (key, value) => MapEntry(key, value.toDouble()),
+          );
           _cacheTime = cacheTime;
           return _cachedRates!;
         }
       }
 
       // Fetch fresh data from API
-      final response = await http.get(
-        Uri.parse('$_baseUrl/USD'),
-        headers: {'Accept': 'application/json'},
-      ).timeout(const Duration(seconds: 10));
+      final response = await http
+          .get(
+            Uri.parse('$_baseUrl/USD'),
+            headers: {'Accept': 'application/json'},
+          )
+          .timeout(const Duration(seconds: 10));
 
       if (response.statusCode == 200) {
         final Map<String, dynamic> data = json.decode(response.body);
         final Map<String, dynamic> rates = data['rates'];
-        
-        _cachedRates = rates.map((key, value) => MapEntry(key, value.toDouble()));
+
+        _cachedRates = rates.map(
+          (key, value) => MapEntry(key, value.toDouble()),
+        );
         _cacheTime = DateTime.now();
-        
+
         // Cache the results
         await prefs.setString(_cacheKey, json.encode(_cachedRates));
         await prefs.setString(_cacheTimeKey, _cacheTime!.toIso8601String());
-        
+
         return _cachedRates!;
       } else {
-        throw Exception('Failed to fetch exchange rates: ${response.statusCode}');
+        throw Exception(
+          'Failed to fetch exchange rates: ${response.statusCode}',
+        );
       }
     } catch (e) {
       print('Error fetching exchange rates: $e');
       print('Using fallback rates');
-      
+
       // Return fallback rates if API fails
       _cachedRates = Map.from(_fallbackRates);
       _cacheTime = DateTime.now();
@@ -740,17 +834,18 @@ class CurrencyConversionService {
     String toCurrency,
   ) async {
     if (fromCurrency == toCurrency) return amount;
-    
+
     try {
       final rates = await getExchangeRates();
-      
-      final fromRate = rates[fromCurrency] ?? _fallbackRates[fromCurrency] ?? 1.0;
+
+      final fromRate =
+          rates[fromCurrency] ?? _fallbackRates[fromCurrency] ?? 1.0;
       final toRate = rates[toCurrency] ?? _fallbackRates[toCurrency] ?? 1.0;
-      
+
       // Convert from source currency to USD, then to target currency
       final usdAmount = amount / fromRate;
       final convertedAmount = usdAmount * toRate;
-      
+
       return convertedAmount;
     } catch (e) {
       print('Error converting currency: $e');
@@ -765,7 +860,11 @@ class CurrencyConversionService {
     String toCurrency,
   ) async {
     final amount = cents / 100.0;
-    final convertedAmount = await convertCurrency(amount, fromCurrency, toCurrency);
+    final convertedAmount = await convertCurrency(
+      amount,
+      fromCurrency,
+      toCurrency,
+    );
     return (convertedAmount * 100).round();
   }
 }
@@ -809,27 +908,27 @@ class CurrencyFormatter {
   static String formatAmount(double amount, String currencyCode) {
     final symbol = currencySymbols[currencyCode] ?? '\$';
     final afterAmount = symbolAfterAmount[currencyCode] ?? false;
-    
+
     // Special handling for JPY (no decimal places)
     if (currencyCode == 'JPY') {
       final jpyAmount = amount.round();
       return afterAmount ? '$jpyAmount $symbol' : '$symbol$jpyAmount';
     }
-    
+
     final formattedAmount = amount.toStringAsFixed(2);
     return afterAmount ? '$formattedAmount $symbol' : '$symbol$formattedAmount';
   }
 
   // Convert and format cents from base currency to display currency
   static Future<String> formatCentsWithConversion(
-    int cents, 
+    int cents,
     String displayCurrency, {
     String fromCurrency = baseCurrency,
   }) async {
     try {
       final convertedCents = await CurrencyConversionService.convertCents(
-        cents, 
-        fromCurrency, 
+        cents,
+        fromCurrency,
         displayCurrency,
       );
       return formatCents(convertedCents, displayCurrency);
@@ -842,14 +941,14 @@ class CurrencyFormatter {
 
   // Convert and format amount from base currency to display currency
   static Future<String> formatAmountWithConversion(
-    double amount, 
+    double amount,
     String displayCurrency, {
     String fromCurrency = baseCurrency,
   }) async {
     try {
       final convertedAmount = await CurrencyConversionService.convertCurrency(
-        amount, 
-        fromCurrency, 
+        amount,
+        fromCurrency,
         displayCurrency,
       );
       return formatAmount(convertedAmount, displayCurrency);
@@ -861,11 +960,18 @@ class CurrencyFormatter {
   }
 
   // Get exchange rate info for display
-  static Future<String> getExchangeRateInfo(String fromCurrency, String toCurrency) async {
+  static Future<String> getExchangeRateInfo(
+    String fromCurrency,
+    String toCurrency,
+  ) async {
     if (fromCurrency == toCurrency) return '';
-    
+
     try {
-      final convertedAmount = await CurrencyConversionService.convertCurrency(1.0, fromCurrency, toCurrency);
+      final convertedAmount = await CurrencyConversionService.convertCurrency(
+        1.0,
+        fromCurrency,
+        toCurrency,
+      );
       return '1 $fromCurrency = ${formatAmount(convertedAmount, toCurrency)}';
     } catch (e) {
       return 'Exchange rate unavailable';
@@ -1024,7 +1130,9 @@ class AppLocalizations {
   };
 
   static String translate(String key, String languageCode) {
-    return _localizedStrings[languageCode]?[key] ?? _localizedStrings['en']?[key] ?? key;
+    return _localizedStrings[languageCode]?[key] ??
+        _localizedStrings['en']?[key] ??
+        key;
   }
 }
 
@@ -1051,7 +1159,7 @@ Future<void> _showSwishPaymentDialog({
     amountCents: amountCents,
     message: message,
   );
-  
+
   showDialog(
     context: context,
     builder: (context) => AlertDialog(
@@ -1119,7 +1227,7 @@ class MyApp extends ConsumerWidget {
       redirect: (context, state) {
         final bool isLoggedIn = fb.FirebaseAuth.instance.currentUser != null;
         final bool onAuth = state.matchedLocation == '/auth';
-        
+
         // Check for developer mode
         if (devMode && onAuth) return '/groups';
         if (!isLoggedIn && !devMode && !onAuth) return '/auth';
@@ -1200,7 +1308,9 @@ class MyApp extends ConsumerWidget {
       elevatedButtonTheme: ElevatedButtonThemeData(
         style: ElevatedButton.styleFrom(
           elevation: 0,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(20),
+          ),
           padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 18),
           textStyle: const TextStyle(
             fontWeight: FontWeight.w600,
@@ -1239,13 +1349,22 @@ class MyApp extends ConsumerWidget {
         ),
         filled: true,
         fillColor: Colors.white,
-        contentPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: 24,
+          vertical: 20,
+        ),
         hintStyle: const TextStyle(color: Color(0xFFA0AEC0)),
-        labelStyle: const TextStyle(color: Color(0xFF4A5568), fontWeight: FontWeight.w500),
+        labelStyle: const TextStyle(
+          color: Color(0xFF4A5568),
+          fontWeight: FontWeight.w500,
+        ),
       ),
       listTileTheme: ListTileThemeData(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        contentPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: 24,
+          vertical: 12,
+        ),
         titleTextStyle: const TextStyle(
           color: Color(0xFF1A202C),
           fontWeight: FontWeight.w600,
@@ -1289,7 +1408,9 @@ class MyApp extends ConsumerWidget {
       elevatedButtonTheme: ElevatedButtonThemeData(
         style: ElevatedButton.styleFrom(
           elevation: 0,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(20),
+          ),
           padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 18),
           textStyle: const TextStyle(
             fontWeight: FontWeight.w600,
@@ -1328,13 +1449,22 @@ class MyApp extends ConsumerWidget {
         ),
         filled: true,
         fillColor: const Color(0xFF1A202C),
-        contentPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: 24,
+          vertical: 20,
+        ),
         hintStyle: const TextStyle(color: Color(0xFF718096)),
-        labelStyle: const TextStyle(color: Color(0xFFA0AEC0), fontWeight: FontWeight.w500),
+        labelStyle: const TextStyle(
+          color: Color(0xFFA0AEC0),
+          fontWeight: FontWeight.w500,
+        ),
       ),
       listTileTheme: ListTileThemeData(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        contentPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: 24,
+          vertical: 12,
+        ),
         titleTextStyle: const TextStyle(
           color: Color(0xFFE2E8F0),
           fontWeight: FontWeight.w600,
@@ -1369,35 +1499,34 @@ class MyApp extends ConsumerWidget {
 
 class SwishReturnWrapper extends StatefulWidget {
   final Widget child;
-  
+
   const SwishReturnWrapper({super.key, required this.child});
-  
+
   @override
   State<SwishReturnWrapper> createState() => _SwishReturnWrapperState();
 }
 
-class _SwishReturnWrapperState extends State<SwishReturnWrapper> with WidgetsBindingObserver {
+class _SwishReturnWrapperState extends State<SwishReturnWrapper>
+    with WidgetsBindingObserver {
   final SwishReturnDetector _detector = SwishReturnDetector();
-  
+
   @override
   void initState() {
     super.initState();
     _initializeDetector();
   }
-  
+
   @override
   void dispose() {
     _detector.dispose();
     super.dispose();
   }
-  
+
   Future<void> _initializeDetector() async {
     await _detector.loadPersistentData();
-    _detector.initialize(
-      onReturnFromSwish: _showSwishReturnDialog,
-    );
+    _detector.initialize(onReturnFromSwish: _showSwishReturnDialog);
   }
-  
+
   void _showSwishReturnDialog(List<PendingSwishPayment> pendingPayments) {
     if (pendingPayments.isEmpty || !mounted) return;
 
@@ -1421,41 +1550,43 @@ class _SwishReturnWrapperState extends State<SwishReturnWrapper> with WidgetsBin
               style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500),
             ),
             const SizedBox(height: 16),
-            ...pendingPayments.map((payment) => Container(
-              margin: const EdgeInsets.only(bottom: 8),
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: Colors.blue.shade50,
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: Colors.blue.shade200),
-              ),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          '\$${(payment.amountCents / 100).toStringAsFixed(2)}',
-                          style: const TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.bold,
+            ...pendingPayments.map(
+              (payment) => Container(
+                margin: const EdgeInsets.only(bottom: 8),
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.blue.shade50,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.blue.shade200),
+                ),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            '\$${(payment.amountCents / 100).toStringAsFixed(2)}',
+                            style: const TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                            ),
                           ),
-                        ),
-                        Text(
-                          'To: ${_getDisplayName(payment.creditorId)}',
-                          style: TextStyle(
-                            fontSize: 14,
-                            color: Colors.grey.shade600,
+                          Text(
+                            'To: ${_getDisplayName(payment.creditorId)}',
+                            style: TextStyle(
+                              fontSize: 14,
+                              color: Colors.grey.shade600,
+                            ),
                           ),
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
-                  ),
-                  Icon(Icons.arrow_forward, color: Colors.blue.shade600),
-                ],
+                    Icon(Icons.arrow_forward, color: Colors.blue.shade600),
+                  ],
+                ),
               ),
-            )),
+            ),
           ],
         ),
         actions: [
@@ -1484,11 +1615,13 @@ class _SwishReturnWrapperState extends State<SwishReturnWrapper> with WidgetsBin
 
   void _confirmAllPayments(List<PendingSwishPayment> payments) {
     _detector.clearAllPayments();
-    
+
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('${payments.length} payment(s) marked as completed! 🎉'),
+          content: Text(
+            '${payments.length} payment(s) marked as completed! 🎉',
+          ),
           backgroundColor: Colors.green,
           duration: const Duration(seconds: 4),
         ),
@@ -1501,7 +1634,7 @@ class _SwishReturnWrapperState extends State<SwishReturnWrapper> with WidgetsBin
     if (userId == 'developer_user') return 'Developer';
     return 'User ${userId.substring(0, min(8, userId.length))}';
   }
-  
+
   @override
   Widget build(BuildContext context) {
     return widget.child;
@@ -1546,7 +1679,7 @@ class _AuthScreenContentState extends ConsumerState<_AuthScreenContent> {
       try {
         final userProfileRepo = ref.read(userProfileRepositoryProvider);
         final existingProfile = await userProfileRepo.getUserProfile(user.uid);
-        
+
         if (existingProfile == null) {
           // Create new profile with user data
           final newProfile = UserProfile(
@@ -1582,14 +1715,18 @@ class _AuthScreenContentState extends ConsumerState<_AuthScreenContent> {
               final themeMode = ref.watch(themeNotifierProvider);
               return IconButton(
                 onPressed: () {
-                  final newMode = themeMode == ThemeMode.dark 
-                    ? ThemeMode.light 
-                    : ThemeMode.dark;
-                  ref.read(themeNotifierProvider.notifier).setThemeMode(newMode);
+                  final newMode = themeMode == ThemeMode.dark
+                      ? ThemeMode.light
+                      : ThemeMode.dark;
+                  ref
+                      .read(themeNotifierProvider.notifier)
+                      .setThemeMode(newMode);
                 },
-                icon: Icon(themeMode == ThemeMode.dark 
-                  ? Icons.light_mode 
-                  : Icons.dark_mode),
+                icon: Icon(
+                  themeMode == ThemeMode.dark
+                      ? Icons.light_mode
+                      : Icons.dark_mode,
+                ),
                 tooltip: 'Toggle theme',
               );
             },
@@ -1621,371 +1758,97 @@ class _AuthScreenContentState extends ConsumerState<_AuthScreenContent> {
         child: Stack(
           children: [
             // Noise texture overlay
-            Positioned.fill(
-              child: CustomPaint(
-                painter: NoisePainter(),
-              ),
-            ),
+            Positioned.fill(child: CustomPaint(painter: NoisePainter())),
             // Main content
             VStack([
-          60.heightBox,
-          Container(
-            margin: const EdgeInsets.symmetric(horizontal: 20),
-            padding: const EdgeInsets.all(40),
-            decoration: BoxDecoration(
-              color: Theme.of(context).brightness == Brightness.dark
-                  ? const Color(0xFF1A202C).withOpacity(0.9)
-                  : Colors.white.withOpacity(0.9),
-              borderRadius: BorderRadius.circular(32),
-              border: Border.all(
-                color: Theme.of(context).brightness == Brightness.dark
-                    ? const Color(0xFF2D3748).withOpacity(0.3)
-                    : Colors.white.withOpacity(0.2),
-                width: 1,
-              ),
-              boxShadow: [
-                BoxShadow(
-                  color: Theme.of(context).brightness == Brightness.dark
-                      ? Colors.black.withOpacity(0.3)
-                      : Colors.black.withOpacity(0.08),
-                  blurRadius: 40,
-                  offset: const Offset(0, 20),
-                ),
-                BoxShadow(
-                  color: Theme.of(context).brightness == Brightness.dark
-                      ? Colors.black.withOpacity(0.2)
-                      : Colors.black.withOpacity(0.04),
-                  blurRadius: 20,
-                  offset: const Offset(0, 10),
-                ),
-              ],
-            ),
-            child: VStack([
+              60.heightBox,
               Container(
-                padding: const EdgeInsets.all(20),
+                margin: const EdgeInsets.symmetric(horizontal: 20),
+                padding: const EdgeInsets.all(40),
                 decoration: BoxDecoration(
                   color: Theme.of(context).brightness == Brightness.dark
-                      ? Theme.of(context).colorScheme.primary.withOpacity(0.2)
-                      : const Color(0xFF2D3748).withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(20),
-                ),
-                child: Icon(
-                  Icons.account_balance_wallet_outlined,
-                  size: 48,
-                  color: Theme.of(context).brightness == Brightness.dark
-                      ? Theme.of(context).colorScheme.primary
-                      : const Color(0xFF2D3748),
-                ),
-              ),
-              32.heightBox,
-              'dela'.text.xl5.bold.color(Theme.of(context).colorScheme.onSurface).center.make(),
-        16.heightBox,
-              'Split expenses effortlessly with friends and family'
-            .text
-                  .lg
-                  .color(Theme.of(context).colorScheme.onSurface.withOpacity(0.7))
-                  .center
-            .make(),
-              48.heightBox,
-        // Google
-              Container(
-                width: double.infinity,
-                height: 56,
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(28),
-                  gradient: LinearGradient(
-                    colors: Theme.of(context).brightness == Brightness.dark
-                        ? [const Color(0xFF2D3748), const Color(0xFF1A202C)]
-                        : [Colors.white, Colors.grey.shade50],
-                  ),
+                      ? const Color(0xFF1A202C).withOpacity(0.9)
+                      : Colors.white.withOpacity(0.9),
+                  borderRadius: BorderRadius.circular(32),
                   border: Border.all(
                     color: Theme.of(context).brightness == Brightness.dark
-                        ? const Color(0xFF4A5568)
-                        : const Color(0xFFE2E8F0), 
-                    width: 1.5
-                  ),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Theme.of(context).brightness == Brightness.dark
-                          ? Colors.black.withOpacity(0.2)
-                          : Colors.black.withOpacity(0.04),
-                      blurRadius: 8,
-                      offset: const Offset(0, 4),
-                    ),
-                  ],
-                ),
-                child: ElevatedButton.icon(
-          onPressed: _isLoading
-              ? null
-              : () => _handle(() async {
-                    final user = await repo.signInWithGoogle();
-                    ref.read(currentUserProvider.notifier).set(user);
-                    
-                    // Navigate immediately, then create profile in background
-                    if (context.mounted) context.go('/groups');
-                    
-                    // Create user profile in background (don't block sign-in)
-                    if (user != null) {
-                      _createUserProfileInBackground(user, ref);
-                    }
-                  }),
-                  icon: const Icon(Icons.g_mobiledata, size: 22, color: Color(0xFF4285F4)),
-                  label: Text(
-                    'Continue with Google',
-                    style: TextStyle(
-                      fontWeight: FontWeight.w600,
-                      fontSize: 16,
-                      color: Theme.of(context).brightness == Brightness.dark
-                          ? Theme.of(context).colorScheme.onSurface
-                          : const Color(0xFF1A202C),
-                    ),
-                  ),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.transparent,
-                    foregroundColor: Theme.of(context).brightness == Brightness.dark
-                        ? Theme.of(context).colorScheme.onSurface
-                        : const Color(0xFF1A202C),
-                    elevation: 0,
-                    shadowColor: Colors.transparent,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
-                  ),
-                ),
-              ),
-              20.heightBox,
-        // Apple (will work on iOS/macOS targets)
-              Container(
-                width: double.infinity,
-                height: 56,
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(28),
-                  gradient: LinearGradient(
-                    colors: Theme.of(context).brightness == Brightness.dark
-                        ? [const Color(0xFF4A5568), const Color(0xFF2D3748)]
-                        : [const Color(0xFF1A202C), const Color(0xFF2D3748)],
+                        ? const Color(0xFF2D3748).withOpacity(0.3)
+                        : Colors.white.withOpacity(0.2),
+                    width: 1,
                   ),
                   boxShadow: [
                     BoxShadow(
                       color: Theme.of(context).brightness == Brightness.dark
                           ? Colors.black.withOpacity(0.3)
-                          : Colors.black.withOpacity(0.15),
-                      blurRadius: 12,
-                      offset: const Offset(0, 6),
+                          : Colors.black.withOpacity(0.08),
+                      blurRadius: 40,
+                      offset: const Offset(0, 20),
                     ),
-                  ],
-                ),
-                child: ElevatedButton.icon(
-          onPressed: _isLoading
-              ? null
-              : () => _handle(() async {
-                    final user = await repo.signInWithApple();
-                    ref.read(currentUserProvider.notifier).set(user);
-                    if (context.mounted) context.go('/groups');
-                  }),
-                  icon: const Icon(Icons.apple, size: 22, color: Colors.white),
-                  label: const Text(
-                    'Continue with Apple',
-                    style: TextStyle(
-                      fontWeight: FontWeight.w600,
-                      fontSize: 16,
-                      color: Colors.white,
-                    ),
-                  ),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.transparent,
-                    foregroundColor: Colors.white,
-                    elevation: 0,
-                    shadowColor: Colors.transparent,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
-                  ),
-                ),
-              ),
-              32.heightBox,
-              // Divider
-              Row(
-                children: [
-                  Expanded(child: Container(height: 1, color: const Color(0xFFE2E8F0))),
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16),
-                    child: Text(
-                      'or',
-                      style: TextStyle(
-                        color: const Color(0xFF718096),
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
-                  ),
-                  Expanded(child: Container(height: 1, color: const Color(0xFFE2E8F0))),
-                ],
-              ),
-              32.heightBox,
-        // Email + password
-        VxTextField(
-          controller: _emailController,
-          labelText: 'Email',
-          keyboardType: TextInputType.emailAddress,
-        ),
-              20.heightBox,
-        VxTextField(
-          controller: _passwordController,
-          labelText: 'Password',
-          isPassword: true,
-        ),
-              32.heightBox,
-              Container(
-                width: double.infinity,
-                height: 56,
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(28),
-                  gradient: const LinearGradient(
-                    colors: [Color(0xFF2D3748), Color(0xFF4A5568)],
-                  ),
-                  boxShadow: [
                     BoxShadow(
-                      color: const Color(0xFF2D3748).withOpacity(0.3),
-                      blurRadius: 12,
-                      offset: const Offset(0, 6),
+                      color: Theme.of(context).brightness == Brightness.dark
+                          ? Colors.black.withOpacity(0.2)
+                          : Colors.black.withOpacity(0.04),
+                      blurRadius: 20,
+                      offset: const Offset(0, 10),
                     ),
                   ],
-                ),
-                child: ElevatedButton(
-          onPressed: _isLoading
-              ? null
-              : () => _handle(() async {
-                    final user = await repo.signInWithEmailPassword(
-                      email: _emailController.text.trim(),
-                      password: _passwordController.text,
-                    );
-                    ref.read(currentUserProvider.notifier).set(user);
-                    
-                    // Navigate immediately, then create profile in background
-                    if (context.mounted) context.go('/groups');
-                    
-                    // Create user profile in background (don't block sign-in)
-                    if (user != null) {
-                      _createUserProfileInBackground(user, ref);
-                    }
-                  }),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.transparent,
-                    foregroundColor: Colors.white,
-                    elevation: 0,
-                    shadowColor: Colors.transparent,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
-                  ),
-                  child: const Text(
-                    'Sign in with Email',
-                    style: TextStyle(
-                      fontWeight: FontWeight.w600,
-                      fontSize: 16,
-                    ),
-                  ),
-                ),
-              ),
-        24.heightBox,
-        // Phone number
-        VxTextField(
-          controller: _phoneController,
-          labelText: 'Phone number',
-          keyboardType: TextInputType.phone,
-        ),
-        12.heightBox,
-        SizedBox(
-          width: double.infinity,
-          child: ElevatedButton(
-          onPressed: _isLoading
-              ? null
-              : () => _handle(() async {
-                    final user = await repo.signInWithPhoneNumber(
-                      phoneNumber: _phoneController.text.trim(),
-                    );
-                      if (user != null) {
-                    ref.read(currentUserProvider.notifier).set(user);
-                    if (context.mounted) context.go('/groups');
-                      } else {
-                        if (!mounted) return;
-                        showDialog(
-                          context: context,
-                          builder: (ctx) {
-                            final verification = ref.read(phoneAuthStateProvider);
-                            return AlertDialog(
-                              title: const Text('Enter SMS Code'),
-                              content: VxTextField(
-                                controller: _smsCodeController,
-                                labelText: '6-digit code',
-                                keyboardType: TextInputType.number,
-                              ),
-                              actions: [
-                                TextButton(
-                                  onPressed: () => Navigator.of(ctx).pop(),
-                                  child: const Text('Cancel'),
-                                ),
-                                ElevatedButton(
-                                  onPressed: () async {
-                                    final vId = verification.verificationId;
-                                    if (vId == null) return;
-                                    final confirmed = await repo.confirmPhoneCode(
-                                      verificationId: vId,
-                                      smsCode: _smsCodeController.text.trim(),
-                                    );
-                                    if (!mounted) return;
-                                    if (confirmed != null) {
-                                      ref.read(currentUserProvider.notifier).set(confirmed);
-                                      Navigator.of(ctx).pop();
-                                      if (context.mounted) context.go('/groups');
-                                    }
-                                  },
-                                  child: const Text('Confirm'),
-                                ),
-                              ],
-                            );
-                          },
-                        );
-                      }
-                  }),
-          child: const Text('Sign in with Phone'),
-          ),
-        ),
-        if (_isLoading) 16.heightBox,
-        if (_isLoading) const CircularProgressIndicator(),
-        24.heightBox,
-              // Developer login
-              Container(
-                margin: const EdgeInsets.only(top: 32),
-                padding: const EdgeInsets.all(24),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFF7FAFC),
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(color: const Color(0xFFE2E8F0), width: 1),
                 ),
                 child: VStack([
                   Container(
-                    padding: const EdgeInsets.all(12),
+                    padding: const EdgeInsets.all(20),
                     decoration: BoxDecoration(
-                      color: const Color(0xFFED8936).withOpacity(0.1),
-                      borderRadius: BorderRadius.circular(12),
+                      color: Theme.of(context).brightness == Brightness.dark
+                          ? Theme.of(
+                              context,
+                            ).colorScheme.primary.withOpacity(0.2)
+                          : const Color(0xFF2D3748).withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(20),
                     ),
                     child: Icon(
-                      Icons.developer_mode,
-                      color: const Color(0xFFED8936),
-                      size: 24,
+                      Icons.account_balance_wallet_outlined,
+                      size: 48,
+                      color: Theme.of(context).brightness == Brightness.dark
+                          ? Theme.of(context).colorScheme.primary
+                          : const Color(0xFF2D3748),
                     ),
                   ),
+                  32.heightBox,
+                  'dela'.text.xl5.bold
+                      .color(Theme.of(context).colorScheme.onSurface)
+                      .center
+                      .make(),
                   16.heightBox,
-                  'Developer Mode'.text.lg.bold.center.make(),
-                  8.heightBox,
-                  'Access demo data instantly'.text.sm.color(const Color(0xFF718096)).center.make(),
-                  20.heightBox,
+                  'Split expenses effortlessly with friends and family'.text.lg
+                      .color(
+                        Theme.of(
+                          context,
+                        ).colorScheme.onSurface.withOpacity(0.7),
+                      )
+                      .center
+                      .make(),
+                  48.heightBox,
+                  // Google
                   Container(
                     width: double.infinity,
-                    height: 48,
+                    height: 56,
                     decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(24),
-                      gradient: const LinearGradient(
-                        colors: [Color(0xFFED8936), Color(0xFFDD6B20)],
+                      borderRadius: BorderRadius.circular(28),
+                      gradient: LinearGradient(
+                        colors: Theme.of(context).brightness == Brightness.dark
+                            ? [const Color(0xFF2D3748), const Color(0xFF1A202C)]
+                            : [Colors.white, Colors.grey.shade50],
+                      ),
+                      border: Border.all(
+                        color: Theme.of(context).brightness == Brightness.dark
+                            ? const Color(0xFF4A5568)
+                            : const Color(0xFFE2E8F0),
+                        width: 1.5,
                       ),
                       boxShadow: [
                         BoxShadow(
-                          color: const Color(0xFFED8936).withOpacity(0.3),
+                          color: Theme.of(context).brightness == Brightness.dark
+                              ? Colors.black.withOpacity(0.2)
+                              : Colors.black.withOpacity(0.04),
                           blurRadius: 8,
                           offset: const Offset(0, 4),
                         ),
@@ -1995,27 +1858,355 @@ class _AuthScreenContentState extends ConsumerState<_AuthScreenContent> {
                       onPressed: _isLoading
                           ? null
                           : () => _handle(() async {
-                                await _createDeveloperData(ref);
-                                if (context.mounted) context.go('/groups');
-                              }),
-                      icon: const Icon(Icons.developer_mode, size: 18),
-                      label: const Text('Login as Developer'),
+                              final user = await repo.signInWithGoogle();
+                              ref.read(currentUserProvider.notifier).set(user);
+
+                              // Navigate immediately, then create profile in background
+                              if (context.mounted) context.go('/groups');
+
+                              // Create user profile in background (don't block sign-in)
+                              if (user != null) {
+                                _createUserProfileInBackground(user, ref);
+                              }
+                            }),
+                      icon: const Icon(
+                        Icons.g_mobiledata,
+                        size: 22,
+                        color: Color(0xFF4285F4),
+                      ),
+                      label: Text(
+                        'Continue with Google',
+                        style: TextStyle(
+                          fontWeight: FontWeight.w600,
+                          fontSize: 16,
+                          color: Theme.of(context).brightness == Brightness.dark
+                              ? Theme.of(context).colorScheme.onSurface
+                              : const Color(0xFF1A202C),
+                        ),
+                      ),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.transparent,
+                        foregroundColor:
+                            Theme.of(context).brightness == Brightness.dark
+                            ? Theme.of(context).colorScheme.onSurface
+                            : const Color(0xFF1A202C),
+                        elevation: 0,
+                        shadowColor: Colors.transparent,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(28),
+                        ),
+                      ),
+                    ),
+                  ),
+                  20.heightBox,
+                  // Apple (will work on iOS/macOS targets)
+                  Container(
+                    width: double.infinity,
+                    height: 56,
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(28),
+                      gradient: LinearGradient(
+                        colors: Theme.of(context).brightness == Brightness.dark
+                            ? [const Color(0xFF4A5568), const Color(0xFF2D3748)]
+                            : [
+                                const Color(0xFF1A202C),
+                                const Color(0xFF2D3748),
+                              ],
+                      ),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Theme.of(context).brightness == Brightness.dark
+                              ? Colors.black.withOpacity(0.3)
+                              : Colors.black.withOpacity(0.15),
+                          blurRadius: 12,
+                          offset: const Offset(0, 6),
+                        ),
+                      ],
+                    ),
+                    child: ElevatedButton.icon(
+                      onPressed: _isLoading
+                          ? null
+                          : () => _handle(() async {
+                              final user = await repo.signInWithApple();
+                              ref.read(currentUserProvider.notifier).set(user);
+                              if (context.mounted) context.go('/groups');
+                            }),
+                      icon: const Icon(
+                        Icons.apple,
+                        size: 22,
+                        color: Colors.white,
+                      ),
+                      label: const Text(
+                        'Continue with Apple',
+                        style: TextStyle(
+                          fontWeight: FontWeight.w600,
+                          fontSize: 16,
+                          color: Colors.white,
+                        ),
+                      ),
                       style: ElevatedButton.styleFrom(
                         backgroundColor: Colors.transparent,
                         foregroundColor: Colors.white,
                         elevation: 0,
                         shadowColor: Colors.transparent,
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(28),
+                        ),
                       ),
                     ),
                   ),
+                  32.heightBox,
+                  // Divider
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Container(
+                          height: 1,
+                          color: const Color(0xFFE2E8F0),
+                        ),
+                      ),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 16),
+                        child: Text(
+                          'or',
+                          style: TextStyle(
+                            color: const Color(0xFF718096),
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ),
+                      Expanded(
+                        child: Container(
+                          height: 1,
+                          color: const Color(0xFFE2E8F0),
+                        ),
+                      ),
+                    ],
+                  ),
+                  32.heightBox,
+                  // Email + password
+                  VxTextField(
+                    controller: _emailController,
+                    labelText: 'Email',
+                    keyboardType: TextInputType.emailAddress,
+                  ),
+                  20.heightBox,
+                  VxTextField(
+                    controller: _passwordController,
+                    labelText: 'Password',
+                    isPassword: true,
+                  ),
+                  32.heightBox,
+                  Container(
+                    width: double.infinity,
+                    height: 56,
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(28),
+                      gradient: const LinearGradient(
+                        colors: [Color(0xFF2D3748), Color(0xFF4A5568)],
+                      ),
+                      boxShadow: [
+                        BoxShadow(
+                          color: const Color(0xFF2D3748).withOpacity(0.3),
+                          blurRadius: 12,
+                          offset: const Offset(0, 6),
+                        ),
+                      ],
+                    ),
+                    child: ElevatedButton(
+                      onPressed: _isLoading
+                          ? null
+                          : () => _handle(() async {
+                              final user = await repo.signInWithEmailPassword(
+                                email: _emailController.text.trim(),
+                                password: _passwordController.text,
+                              );
+                              ref.read(currentUserProvider.notifier).set(user);
+
+                              // Navigate immediately, then create profile in background
+                              if (context.mounted) context.go('/groups');
+
+                              // Create user profile in background (don't block sign-in)
+                              if (user != null) {
+                                _createUserProfileInBackground(user, ref);
+                              }
+                            }),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.transparent,
+                        foregroundColor: Colors.white,
+                        elevation: 0,
+                        shadowColor: Colors.transparent,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(28),
+                        ),
+                      ),
+                      child: const Text(
+                        'Sign in with Email',
+                        style: TextStyle(
+                          fontWeight: FontWeight.w600,
+                          fontSize: 16,
+                        ),
+                      ),
+                    ),
+                  ),
+                  24.heightBox,
+                  // Phone number
+                  VxTextField(
+                    controller: _phoneController,
+                    labelText: 'Phone number',
+                    keyboardType: TextInputType.phone,
+                  ),
+                  12.heightBox,
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton(
+                      onPressed: _isLoading
+                          ? null
+                          : () => _handle(() async {
+                              final user = await repo.signInWithPhoneNumber(
+                                phoneNumber: _phoneController.text.trim(),
+                              );
+                              if (user != null) {
+                                ref
+                                    .read(currentUserProvider.notifier)
+                                    .set(user);
+                                if (context.mounted) context.go('/groups');
+                              } else {
+                                if (!mounted) return;
+                                showDialog(
+                                  context: context,
+                                  builder: (ctx) {
+                                    final verification = ref.read(
+                                      phoneAuthStateProvider,
+                                    );
+                                    return AlertDialog(
+                                      title: const Text('Enter SMS Code'),
+                                      content: VxTextField(
+                                        controller: _smsCodeController,
+                                        labelText: '6-digit code',
+                                        keyboardType: TextInputType.number,
+                                      ),
+                                      actions: [
+                                        TextButton(
+                                          onPressed: () =>
+                                              Navigator.of(ctx).pop(),
+                                          child: const Text('Cancel'),
+                                        ),
+                                        ElevatedButton(
+                                          onPressed: () async {
+                                            final vId =
+                                                verification.verificationId;
+                                            if (vId == null) return;
+                                            final confirmed = await repo
+                                                .confirmPhoneCode(
+                                                  verificationId: vId,
+                                                  smsCode: _smsCodeController
+                                                      .text
+                                                      .trim(),
+                                                );
+                                            if (!mounted) return;
+                                            if (confirmed != null) {
+                                              ref
+                                                  .read(
+                                                    currentUserProvider
+                                                        .notifier,
+                                                  )
+                                                  .set(confirmed);
+                                              Navigator.of(ctx).pop();
+                                              if (context.mounted)
+                                                context.go('/groups');
+                                            }
+                                          },
+                                          child: const Text('Confirm'),
+                                        ),
+                                      ],
+                                    );
+                                  },
+                                );
+                              }
+                            }),
+                      child: const Text('Sign in with Phone'),
+                    ),
+                  ),
+                  if (_isLoading) 16.heightBox,
+                  if (_isLoading) const CircularProgressIndicator(),
+                  24.heightBox,
+                  // Developer login
+                  Container(
+                    margin: const EdgeInsets.only(top: 32),
+                    padding: const EdgeInsets.all(24),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFF7FAFC),
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(
+                        color: const Color(0xFFE2E8F0),
+                        width: 1,
+                      ),
+                    ),
+                    child: VStack([
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFED8936).withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Icon(
+                          Icons.developer_mode,
+                          color: const Color(0xFFED8936),
+                          size: 24,
+                        ),
+                      ),
+                      16.heightBox,
+                      'Developer Mode'.text.lg.bold.center.make(),
+                      8.heightBox,
+                      'Access demo data instantly'.text.sm
+                          .color(const Color(0xFF718096))
+                          .center
+                          .make(),
+                      20.heightBox,
+                      Container(
+                        width: double.infinity,
+                        height: 48,
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(24),
+                          gradient: const LinearGradient(
+                            colors: [Color(0xFFED8936), Color(0xFFDD6B20)],
+                          ),
+                          boxShadow: [
+                            BoxShadow(
+                              color: const Color(0xFFED8936).withOpacity(0.3),
+                              blurRadius: 8,
+                              offset: const Offset(0, 4),
+                            ),
+                          ],
+                        ),
+                        child: ElevatedButton.icon(
+                          onPressed: _isLoading
+                              ? null
+                              : () => _handle(() async {
+                                  await _createDeveloperData(ref);
+                                  if (context.mounted) context.go('/groups');
+                                }),
+                          icon: const Icon(Icons.developer_mode, size: 18),
+                          label: const Text('Login as Developer'),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.transparent,
+                            foregroundColor: Colors.white,
+                            elevation: 0,
+                            shadowColor: Colors.transparent,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(24),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ]),
+                  ),
+                  24.heightBox,
                 ]),
               ),
-              24.heightBox,
-            ]),
-          ),
-          40.heightBox,
-      ]).p16().scrollVertical(),
+              40.heightBox,
+            ]).p16().scrollVertical(),
           ],
         ),
       ),
@@ -2038,17 +2229,18 @@ class _AuthScreenContentState extends ConsumerState<_AuthScreenContent> {
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Developer mode activated! Sample data loaded instantly.'),
+          content: Text(
+            'Developer mode activated! Sample data loaded instantly.',
+          ),
           backgroundColor: Colors.green,
           duration: Duration(seconds: 2),
         ),
       );
-      
+
       // Navigate immediately
       context.go('/groups');
     }
   }
-
 }
 
 class GroupsScreen extends ConsumerStatefulWidget {
@@ -2073,10 +2265,12 @@ class _GroupsScreenState extends ConsumerState<GroupsScreen> {
   void _initializeGroupsStream() {
     // Only initialize if not already done
     if (_groupsStream != null) return;
-    
+
     final currentUser = fb.FirebaseAuth.instance.currentUser;
     if (currentUser != null) {
-      _groupsStream = ref.read(firestoreRepositoryProvider).watchGroups(currentUser.uid);
+      _groupsStream = ref
+          .read(firestoreRepositoryProvider)
+          .watchGroups(currentUser.uid);
     } else {
       _groupsStream = Stream.value(<Group>[]);
     }
@@ -2099,16 +2293,13 @@ class _GroupsScreenState extends ConsumerState<GroupsScreen> {
 
   Widget _buildUserAvatar(String userId, WidgetRef ref, {double size = 32}) {
     final userProfile = ref.watch(userProfileByIdProvider(userId));
-    
+
     return Container(
       width: size,
       height: size,
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(size / 2),
-        border: Border.all(
-          color: Colors.white,
-          width: 2,
-        ),
+        border: Border.all(color: Colors.white, width: 2),
       ),
       child: CircleAvatar(
         radius: (size - 4) / 2,
@@ -2135,12 +2326,12 @@ class _GroupsScreenState extends ConsumerState<GroupsScreen> {
     final currentUser = ref.watch(currentUserProvider);
     final devMode = ref.watch(developerModeProvider);
     final isDevUser = currentUser?.uid == 'dev_user_123' || devMode;
-    
+
     // Ensure groups stream is initialized for real users
     if (!isDevUser && _groupsStream == null) {
       _initializeGroupsStream();
     }
-    
+
     return Scaffold(
       appBar: AppBar(
         leading: IconButton(
@@ -2162,14 +2353,18 @@ class _GroupsScreenState extends ConsumerState<GroupsScreen> {
               final themeMode = ref.watch(themeNotifierProvider);
               return IconButton(
                 onPressed: () {
-                  final newMode = themeMode == ThemeMode.dark 
-                    ? ThemeMode.light 
-                    : ThemeMode.dark;
-                  ref.read(themeNotifierProvider.notifier).setThemeMode(newMode);
+                  final newMode = themeMode == ThemeMode.dark
+                      ? ThemeMode.light
+                      : ThemeMode.dark;
+                  ref
+                      .read(themeNotifierProvider.notifier)
+                      .setThemeMode(newMode);
                 },
-                icon: Icon(themeMode == ThemeMode.dark 
-                  ? Icons.light_mode 
-                  : Icons.dark_mode),
+                icon: Icon(
+                  themeMode == ThemeMode.dark
+                      ? Icons.light_mode
+                      : Icons.dark_mode,
+                ),
                 tooltip: _translate('toggle_theme'),
               );
             },
@@ -2219,11 +2414,7 @@ class _GroupsScreenState extends ConsumerState<GroupsScreen> {
         child: Stack(
           children: [
             // Noise texture overlay
-            Positioned.fill(
-              child: CustomPaint(
-                painter: NoisePainter(),
-              ),
-            ),
+            Positioned.fill(child: CustomPaint(painter: NoisePainter())),
             // Main content
             Positioned.fill(
               child: SingleChildScrollView(
@@ -2249,7 +2440,8 @@ class _GroupsScreenState extends ConsumerState<GroupsScreen> {
                         ),
                         boxShadow: [
                           BoxShadow(
-                            color: Theme.of(context).brightness == Brightness.dark
+                            color:
+                                Theme.of(context).brightness == Brightness.dark
                                 ? Colors.black.withOpacity(0.3)
                                 : Colors.black.withOpacity(0.06),
                             blurRadius: 20,
@@ -2264,17 +2456,25 @@ class _GroupsScreenState extends ConsumerState<GroupsScreen> {
                               Container(
                                 padding: const EdgeInsets.all(12),
                                 decoration: BoxDecoration(
-                                  color: Theme.of(context).brightness == Brightness.dark
-                                      ? Theme.of(context).colorScheme.primary.withOpacity(0.2)
-                                      : const Color(0xFF2D3748).withOpacity(0.1),
+                                  color:
+                                      Theme.of(context).brightness ==
+                                          Brightness.dark
+                                      ? Theme.of(
+                                          context,
+                                        ).colorScheme.primary.withOpacity(0.2)
+                                      : const Color(
+                                          0xFF2D3748,
+                                        ).withOpacity(0.1),
                                   borderRadius: BorderRadius.circular(12),
                                 ),
                                 child: Icon(
-                                  Icons.groups, 
-                                  color: Theme.of(context).brightness == Brightness.dark
+                                  Icons.groups,
+                                  color:
+                                      Theme.of(context).brightness ==
+                                          Brightness.dark
                                       ? Theme.of(context).colorScheme.primary
-                                      : const Color(0xFF2D3748), 
-                                  size: 24
+                                      : const Color(0xFF2D3748),
+                                  size: 24,
                                 ),
                               ),
                               const SizedBox(width: 16),
@@ -2287,165 +2487,224 @@ class _GroupsScreenState extends ConsumerState<GroupsScreen> {
                                       style: TextStyle(
                                         fontSize: 24,
                                         fontWeight: FontWeight.w600,
-                                        color: Theme.of(context).colorScheme.onSurface,
+                                        color: Theme.of(
+                                          context,
+                                        ).colorScheme.onSurface,
                                       ),
                                     ),
                                     Text(
                                       'Manage your expense groups',
                                       style: TextStyle(
                                         fontSize: 14,
-                                        color: Theme.of(context).colorScheme.onSurface.withOpacity(0.7),
+                                        color: Theme.of(context)
+                                            .colorScheme
+                                            .onSurface
+                                            .withOpacity(0.7),
                                       ),
                                     ),
                                   ],
                                 ),
                               ),
                               IconButton(
-                                onPressed: () => _showNewGroupDialog(context, ref),
-                                icon: const Icon(Icons.add_circle_outline, color: Color(0xFF2D3748)),
+                                onPressed: () =>
+                                    _showNewGroupDialog(context, ref),
+                                icon: const Icon(
+                                  Icons.add_circle_outline,
+                                  color: Color(0xFF2D3748),
+                                ),
                               ),
                             ],
                           ),
                           const SizedBox(height: 24),
                           // Groups list
-                          isDevUser 
-                            ? Consumer(
-                                builder: (context, ref, child) {
-                                  final groups = ref.watch(developerGroupsProvider);
-                                  if (groups.isEmpty) {
-                                    return Container(
-                                      padding: const EdgeInsets.all(32),
-                                      child: Column(
-                                        children: [
-                                          const Icon(Icons.inbox, size: 48, color: Color(0xFFCBD5E0)),
-                                          const SizedBox(height: 16),
-                                          Text(
-                                            'No groups yet',
-                                            style: TextStyle(
-                                              fontSize: 18,
-                                              fontWeight: FontWeight.w600,
-                                              color: const Color(0xFF718096),
-                                            ),
-                                          ),
-                                          const SizedBox(height: 8),
-                                          Text(
-                                            'Create your first group to get started',
-                                            style: TextStyle(
-                                              fontSize: 14,
-                                              color: const Color(0xFFA0AEC0),
-                                            ),
-                                          ),
-                                        ],
-                                      ),
+                          isDevUser
+                              ? Consumer(
+                                  builder: (context, ref, child) {
+                                    final groups = ref.watch(
+                                      developerGroupsProvider,
                                     );
-                                  }
-                                  return Column(
-                                    children: groups.map((g) => _buildGroupCard(context, ref, g)).toList(),
-                                  );
-                                },
-                              )
-                            : StreamBuilder<List<Group>>(
-                                stream: _groupsStream ?? Stream.value(<Group>[]),
-                                builder: (context, snap) {
-                                  if (snap.connectionState == ConnectionState.waiting) {
-                                    return Container(
-                                      padding: const EdgeInsets.all(32),
-                                      child: Column(
-                                        children: [
-                                          const CircularProgressIndicator(),
-                                          const SizedBox(height: 16),
-                                          Text(
-                                            'Loading your groups...',
-                                            style: TextStyle(
-                                              fontSize: 16,
-                                              color: const Color(0xFF718096),
+                                    if (groups.isEmpty) {
+                                      return Container(
+                                        padding: const EdgeInsets.all(32),
+                                        child: Column(
+                                          children: [
+                                            const Icon(
+                                              Icons.inbox,
+                                              size: 48,
+                                              color: Color(0xFFCBD5E0),
                                             ),
-                                          ),
-                                        ],
-                                      ),
-                                    );
-                                  }
-                                  if (snap.hasError) {
-                                    return Center(
-                                      child: Column(
-                                        children: [
-                                          const Icon(Icons.cloud_off, size: 48, color: Color(0xFFE53E3E)),
-                                          const SizedBox(height: 16),
-                                          Text(
-                                            'Connection Issue',
-                                            style: TextStyle(
-                                              fontSize: 18,
-                                              fontWeight: FontWeight.w600,
-                                              color: const Color(0xFFE53E3E),
-                                            ),
-                                          ),
-                                          const SizedBox(height: 8),
-                                          Text(
-                                            'Your groups are temporarily unavailable.\nThey will reappear once connection is restored.',
-                                            textAlign: TextAlign.center,
-                                            style: TextStyle(
-                                              fontSize: 14,
-                                              color: const Color(0xFFA0AEC0),
-                                            ),
-                                          ),
-                                          const SizedBox(height: 16),
-                                          ElevatedButton.icon(
-                                            onPressed: () => setState(() {}), // Trigger rebuild
-                                            icon: const Icon(Icons.refresh),
-                                            label: const Text('Retry'),
-                                          ),
-                                        ],
-                                      ),
-                                    );
-                                  }
-                                  final groups = snap.data ?? [];
-                                  if (groups.isEmpty) {
-                                    return Container(
-                                      padding: const EdgeInsets.all(32),
-                                      child: Column(
-                                        children: [
-                                          const Icon(Icons.group_add, size: 64, color: Color(0xFF4A5568)),
-                                          const SizedBox(height: 24),
-                                          Text(
-                                            'Welcome to Expense Splitter!',
-                                            style: TextStyle(
-                                              fontSize: 20,
-                                              fontWeight: FontWeight.bold,
-                                              color: const Color(0xFF2D3748),
-                                            ),
-                                          ),
-                                          const SizedBox(height: 12),
-                                          Text(
-                                            'Create your first group to start\nsplitting expenses with friends',
-                                            textAlign: TextAlign.center,
-                                            style: TextStyle(
-                                              fontSize: 16,
-                                              color: const Color(0xFF718096),
-                                            ),
-                                          ),
-                                          const SizedBox(height: 24),
-                                          ElevatedButton.icon(
-                                            onPressed: () => _showNewGroupDialog(context, ref),
-                                            icon: const Icon(Icons.add_circle, color: Colors.white),
-                                            label: const Text('Create Your First Group'),
-                                            style: ElevatedButton.styleFrom(
-                                              backgroundColor: const Color(0xFF2D3748),
-                                              foregroundColor: Colors.white,
-                                              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
-                                              shape: RoundedRectangleBorder(
-                                                borderRadius: BorderRadius.circular(12),
+                                            const SizedBox(height: 16),
+                                            Text(
+                                              'No groups yet',
+                                              style: TextStyle(
+                                                fontSize: 18,
+                                                fontWeight: FontWeight.w600,
+                                                color: const Color(0xFF718096),
                                               ),
                                             ),
-                                          ),
-                                        ],
-                                      ),
+                                            const SizedBox(height: 8),
+                                            Text(
+                                              'Create your first group to get started',
+                                              style: TextStyle(
+                                                fontSize: 14,
+                                                color: const Color(0xFFA0AEC0),
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      );
+                                    }
+                                    return Column(
+                                      children: groups
+                                          .map(
+                                            (g) => _buildGroupCard(
+                                              context,
+                                              ref,
+                                              g,
+                                            ),
+                                          )
+                                          .toList(),
                                     );
-                                  }
-                                  return Column(
-                                    children: groups.map((g) => _buildGroupCard(context, ref, g)).toList(),
-                                  );
-                                },
-                              ),
+                                  },
+                                )
+                              : StreamBuilder<List<Group>>(
+                                  stream:
+                                      _groupsStream ?? Stream.value(<Group>[]),
+                                  builder: (context, snap) {
+                                    if (snap.connectionState ==
+                                        ConnectionState.waiting) {
+                                      return Container(
+                                        padding: const EdgeInsets.all(32),
+                                        child: Column(
+                                          children: [
+                                            const CircularProgressIndicator(),
+                                            const SizedBox(height: 16),
+                                            Text(
+                                              'Loading your groups...',
+                                              style: TextStyle(
+                                                fontSize: 16,
+                                                color: const Color(0xFF718096),
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      );
+                                    }
+                                    if (snap.hasError) {
+                                      return Center(
+                                        child: Column(
+                                          children: [
+                                            const Icon(
+                                              Icons.cloud_off,
+                                              size: 48,
+                                              color: Color(0xFFE53E3E),
+                                            ),
+                                            const SizedBox(height: 16),
+                                            Text(
+                                              'Connection Issue',
+                                              style: TextStyle(
+                                                fontSize: 18,
+                                                fontWeight: FontWeight.w600,
+                                                color: const Color(0xFFE53E3E),
+                                              ),
+                                            ),
+                                            const SizedBox(height: 8),
+                                            Text(
+                                              'Your groups are temporarily unavailable.\nThey will reappear once connection is restored.',
+                                              textAlign: TextAlign.center,
+                                              style: TextStyle(
+                                                fontSize: 14,
+                                                color: const Color(0xFFA0AEC0),
+                                              ),
+                                            ),
+                                            const SizedBox(height: 16),
+                                            ElevatedButton.icon(
+                                              onPressed: () => setState(
+                                                () {},
+                                              ), // Trigger rebuild
+                                              icon: const Icon(Icons.refresh),
+                                              label: const Text('Retry'),
+                                            ),
+                                          ],
+                                        ),
+                                      );
+                                    }
+                                    final groups = snap.data ?? [];
+                                    if (groups.isEmpty) {
+                                      return Container(
+                                        padding: const EdgeInsets.all(32),
+                                        child: Column(
+                                          children: [
+                                            const Icon(
+                                              Icons.group_add,
+                                              size: 64,
+                                              color: Color(0xFF4A5568),
+                                            ),
+                                            const SizedBox(height: 24),
+                                            Text(
+                                              'Welcome to Expense Splitter!',
+                                              style: TextStyle(
+                                                fontSize: 20,
+                                                fontWeight: FontWeight.bold,
+                                                color: const Color(0xFF2D3748),
+                                              ),
+                                            ),
+                                            const SizedBox(height: 12),
+                                            Text(
+                                              'Create your first group to start\nsplitting expenses with friends',
+                                              textAlign: TextAlign.center,
+                                              style: TextStyle(
+                                                fontSize: 16,
+                                                color: const Color(0xFF718096),
+                                              ),
+                                            ),
+                                            const SizedBox(height: 24),
+                                            ElevatedButton.icon(
+                                              onPressed: () =>
+                                                  _showNewGroupDialog(
+                                                    context,
+                                                    ref,
+                                                  ),
+                                              icon: const Icon(
+                                                Icons.add_circle,
+                                                color: Colors.white,
+                                              ),
+                                              label: const Text(
+                                                'Create Your First Group',
+                                              ),
+                                              style: ElevatedButton.styleFrom(
+                                                backgroundColor: const Color(
+                                                  0xFF2D3748,
+                                                ),
+                                                foregroundColor: Colors.white,
+                                                padding:
+                                                    const EdgeInsets.symmetric(
+                                                      horizontal: 24,
+                                                      vertical: 16,
+                                                    ),
+                                                shape: RoundedRectangleBorder(
+                                                  borderRadius:
+                                                      BorderRadius.circular(12),
+                                                ),
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      );
+                                    }
+                                    return Column(
+                                      children: groups
+                                          .map(
+                                            (g) => _buildGroupCard(
+                                              context,
+                                              ref,
+                                              g,
+                                            ),
+                                          )
+                                          .toList(),
+                                    );
+                                  },
+                                ),
                         ],
                       ),
                     ),
@@ -2459,22 +2718,23 @@ class _GroupsScreenState extends ConsumerState<GroupsScreen> {
     );
   }
 
-  Widget _buildBalanceIndicator(BuildContext context, WidgetRef ref, bool isDevUser) {
+  Widget _buildBalanceIndicator(
+    BuildContext context,
+    WidgetRef ref,
+    bool isDevUser,
+  ) {
     // Calculate actual amounts owed and owing
     final balanceData = _calculateOverallBalance(ref, isDevUser);
-    
+
     // Removed constant debug printing to improve performance
-    
+
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 20),
       padding: const EdgeInsets.all(24),
       decoration: BoxDecoration(
         color: Colors.white.withOpacity(0.9),
         borderRadius: BorderRadius.circular(20),
-        border: Border.all(
-          color: Colors.white.withOpacity(0.3),
-          width: 1,
-        ),
+        border: Border.all(color: Colors.white.withOpacity(0.3), width: 1),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withOpacity(0.08),
@@ -2558,7 +2818,7 @@ class _GroupsScreenState extends ConsumerState<GroupsScreen> {
   _OverallBalance _calculateOverallBalance(WidgetRef ref, bool isDevUser) {
     // Create a simple hash of the relevant data to check if we need to recalculate
     int currentHash = 0;
-    
+
     if (isDevUser) {
       final groups = ref.watch(developerGroupsProvider);
       currentHash = groups.length.hashCode;
@@ -2568,25 +2828,27 @@ class _GroupsScreenState extends ConsumerState<GroupsScreen> {
         currentHash ^= expenses.length.hashCode;
       }
     }
-    
+
     // If hash matches cached calculation, return cached result
     if (_cachedBalance != null && currentHash == _lastBalanceCalculationHash) {
       return _cachedBalance!;
     }
-    
+
     // Calculate new balance
     int totalYouOwe = 0;
     int totalOwedToYou = 0;
-    
+
     if (isDevUser) {
       // In dev mode, calculate from developer groups
       final groups = ref.watch(developerGroupsProvider);
       final currentUserId = 'dev_user_123';
-      
+
       for (final group in groups) {
         final expenses = ref.watch(developerExpensesProvider(group.id));
-        final settlements = _greedyDebtSettlement(_calculateBalancesForGroup(group, expenses, currentUserId));
-        
+        final settlements = _greedyDebtSettlement(
+          _calculateBalancesForGroup(group, expenses, currentUserId),
+        );
+
         // Sum up what the current user owes and is owed
         for (final settlement in settlements) {
           if (settlement.debtorId == currentUserId) {
@@ -2602,51 +2864,56 @@ class _GroupsScreenState extends ConsumerState<GroupsScreen> {
       totalYouOwe = 0;
       totalOwedToYou = 0;
     }
-    
+
     // Cache the result
-    _cachedBalance = _OverallBalance(youOwe: totalYouOwe, owedToYou: totalOwedToYou);
+    _cachedBalance = _OverallBalance(
+      youOwe: totalYouOwe,
+      owedToYou: totalOwedToYou,
+    );
     _lastBalanceCalculationHash = currentHash;
-    
+
     return _cachedBalance!;
   }
 
-  Map<String, int> _calculateBalancesForGroup(Group group, List<Expense> expenses, String currentUserId) {
+  Map<String, int> _calculateBalancesForGroup(
+    Group group,
+    List<Expense> expenses,
+    String currentUserId,
+  ) {
     final balances = <String, int>{};
-    
+
     // Calculate net balance for each member
     for (final memberId in group.memberUserIds) {
-      final totalPaid = expenses.where((e) => e.paidByUserId == memberId)
+      final totalPaid = expenses
+          .where((e) => e.paidByUserId == memberId)
           .fold<int>(0, (sum, e) => sum + e.amountCents);
       final totalOwed = expenses.fold<int>(0, (sum, expense) {
         return sum + _getOwedAmountForCard(expense, memberId);
       });
       balances[memberId] = totalPaid - totalOwed;
     }
-    
+
     return balances;
   }
 
   Widget _buildGroupCard(BuildContext context, WidgetRef ref, Group group) {
     final isExpanded = _expandedGroups[group.id] ?? false;
     final devMode = ref.watch(developerModeProvider);
-    
+
     // Get expenses for this group to calculate balance
-    final expenses = devMode 
-      ? ref.watch(developerExpensesProvider(group.id))
-      : <Expense>[];
-    
+    final expenses = devMode
+        ? ref.watch(developerExpensesProvider(group.id))
+        : <Expense>[];
+
     // Calculate user's balance in this group
     final userBalance = _calculateUserBalanceInGroup(group, expenses);
-    
+
     return Container(
       margin: const EdgeInsets.only(bottom: 16),
       decoration: BoxDecoration(
         color: Colors.white.withOpacity(0.9),
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(
-          color: Colors.white.withOpacity(0.3),
-          width: 1,
-        ),
+        border: Border.all(color: Colors.white.withOpacity(0.3), width: 1),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withOpacity(0.05),
@@ -2696,7 +2963,8 @@ class _GroupsScreenState extends ConsumerState<GroupsScreen> {
                           children: [
                             // Add member button
                             GestureDetector(
-                              onTap: () => _showAddMemberDialog(context, ref, group),
+                              onTap: () =>
+                                  _showAddMemberDialog(context, ref, group),
                               child: Container(
                                 width: 28,
                                 height: 28,
@@ -2708,7 +2976,11 @@ class _GroupsScreenState extends ConsumerState<GroupsScreen> {
                                     width: 2,
                                   ),
                                 ),
-                                child: const Icon(Icons.add, color: Colors.white, size: 18),
+                                child: const Icon(
+                                  Icons.add,
+                                  color: Colors.white,
+                                  size: 18,
+                                ),
                               ),
                             ),
                             ...group.memberUserIds.take(3).map((userId) {
@@ -2767,8 +3039,8 @@ class _GroupsScreenState extends ConsumerState<GroupsScreen> {
                             children: [
                               Text(
                                 userBalance == 0
-                                  ? 'Group Balance'
-                                  : userBalance > 0
+                                    ? 'Group Balance'
+                                    : userBalance > 0
                                     ? 'Owed'
                                     : 'Owes',
                                 style: TextStyle(
@@ -2779,20 +3051,27 @@ class _GroupsScreenState extends ConsumerState<GroupsScreen> {
                               ),
                               const SizedBox(height: 4),
                               FutureBuilder<String>(
-                                future: userBalance == 0 
-                                  ? Future.value('Even')
-                                  : userBalance > 0
-                                    ? _formatCentsWithConversion(userBalance).then((amount) => '+$amount')
-                                    : _formatCentsWithConversion(userBalance.abs()).then((amount) => '-$amount'),
+                                future: userBalance == 0
+                                    ? Future.value('Even')
+                                    : userBalance > 0
+                                    ? _formatCentsWithConversion(
+                                        userBalance,
+                                      ).then((amount) => '+$amount')
+                                    : _formatCentsWithConversion(
+                                        userBalance.abs(),
+                                      ).then((amount) => '-$amount'),
                                 builder: (context, snapshot) {
                                   return Text(
-                                    snapshot.data ?? (userBalance == 0 ? 'Even' : _formatCents(userBalance)),
+                                    snapshot.data ??
+                                        (userBalance == 0
+                                            ? 'Even'
+                                            : _formatCents(userBalance)),
                                     style: TextStyle(
                                       fontSize: 16,
                                       fontWeight: FontWeight.w600,
-                                      color: userBalance == 0 
-                                        ? const Color(0xFF2D3748)
-                                        : userBalance > 0 
+                                      color: userBalance == 0
+                                          ? const Color(0xFF2D3748)
+                                          : userBalance > 0
                                           ? Colors.green.shade700
                                           : Colors.red.shade700,
                                     ),
@@ -2900,7 +3179,8 @@ class _GroupsScreenState extends ConsumerState<GroupsScreen> {
                             color: Colors.transparent,
                             child: InkWell(
                               borderRadius: BorderRadius.circular(8),
-                              onTap: () => _handleGroupSettle(context, ref, group),
+                              onTap: () =>
+                                  _handleGroupSettle(context, ref, group),
                               child: Container(
                                 padding: const EdgeInsets.all(8),
                                 constraints: const BoxConstraints(
@@ -2930,15 +3210,23 @@ class _GroupsScreenState extends ConsumerState<GroupsScreen> {
                                 builder: (ctx) => Dialog(
                                   backgroundColor: Colors.transparent,
                                   child: Container(
-                                    constraints: const BoxConstraints(maxWidth: 320),
+                                    constraints: const BoxConstraints(
+                                      maxWidth: 320,
+                                    ),
                                     decoration: BoxDecoration(
-                                      color: Theme.of(context).brightness == Brightness.dark 
-                                          ? const Color(0xFF2D3748) 
-                                          : Theme.of(context).colorScheme.surface,
+                                      color:
+                                          Theme.of(context).brightness ==
+                                              Brightness.dark
+                                          ? const Color(0xFF2D3748)
+                                          : Theme.of(
+                                              context,
+                                            ).colorScheme.surface,
                                       borderRadius: BorderRadius.circular(20),
                                       boxShadow: [
                                         BoxShadow(
-                                          color: Theme.of(context).brightness == Brightness.dark
+                                          color:
+                                              Theme.of(context).brightness ==
+                                                  Brightness.dark
                                               ? Colors.black.withOpacity(0.3)
                                               : Colors.black.withOpacity(0.1),
                                           blurRadius: 20,
@@ -2955,10 +3243,15 @@ class _GroupsScreenState extends ConsumerState<GroupsScreen> {
                                           Row(
                                             children: [
                                               Container(
-                                                padding: const EdgeInsets.all(12),
+                                                padding: const EdgeInsets.all(
+                                                  12,
+                                                ),
                                                 decoration: BoxDecoration(
-                                                  color: const Color(0xFF4F46E5).withOpacity(0.2),
-                                                  borderRadius: BorderRadius.circular(12),
+                                                  color: const Color(
+                                                    0xFF4F46E5,
+                                                  ).withOpacity(0.2),
+                                                  borderRadius:
+                                                      BorderRadius.circular(12),
                                                 ),
                                                 child: const Icon(
                                                   Icons.add_circle_outline,
@@ -2969,16 +3262,24 @@ class _GroupsScreenState extends ConsumerState<GroupsScreen> {
                                               const SizedBox(width: 16),
                                               Expanded(
                                                 child: Column(
-                                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                                  crossAxisAlignment:
+                                                      CrossAxisAlignment.start,
                                                   children: [
                                                     Text(
                                                       'Add New Expense',
                                                       style: TextStyle(
                                                         fontSize: 20,
-                                                        fontWeight: FontWeight.w600,
-                                                        color: Theme.of(context).brightness == Brightness.dark
+                                                        fontWeight:
+                                                            FontWeight.w600,
+                                                        color:
+                                                            Theme.of(
+                                                                  context,
+                                                                ).brightness ==
+                                                                Brightness.dark
                                                             ? Colors.white
-                                                            : const Color(0xFF1A202C),
+                                                            : const Color(
+                                                                0xFF1A202C,
+                                                              ),
                                                       ),
                                                     ),
                                                     SizedBox(height: 4),
@@ -2986,9 +3287,17 @@ class _GroupsScreenState extends ConsumerState<GroupsScreen> {
                                                       'Choose how to add your expense',
                                                       style: TextStyle(
                                                         fontSize: 14,
-                                                        color: Theme.of(context).brightness == Brightness.dark
-                                                            ? const Color(0xFFA0AEC0)
-                                                            : const Color(0xFF718096),
+                                                        color:
+                                                            Theme.of(
+                                                                  context,
+                                                                ).brightness ==
+                                                                Brightness.dark
+                                                            ? const Color(
+                                                                0xFFA0AEC0,
+                                                              )
+                                                            : const Color(
+                                                                0xFF718096,
+                                                              ),
                                                       ),
                                                     ),
                                                   ],
@@ -2997,11 +3306,13 @@ class _GroupsScreenState extends ConsumerState<GroupsScreen> {
                                             ],
                                           ),
                                           const SizedBox(height: 24),
-                                          
+
                                           // Manual entry option
                                           Container(
                                             width: double.infinity,
-                                            margin: const EdgeInsets.only(bottom: 12),
+                                            margin: const EdgeInsets.only(
+                                              bottom: 12,
+                                            ),
                                             child: Material(
                                               color: Colors.transparent,
                                               child: InkWell(
@@ -3009,65 +3320,143 @@ class _GroupsScreenState extends ConsumerState<GroupsScreen> {
                                                   Navigator.of(ctx).pop();
                                                   showDialog(
                                                     context: context,
-                                                    builder: (dialogCtx) => _AddExpenseDialog(groupId: group.id),
+                                                    builder: (dialogCtx) =>
+                                                        _AddExpenseDialog(
+                                                          groupId: group.id,
+                                                        ),
                                                   );
                                                 },
-                                                borderRadius: BorderRadius.circular(16),
+                                                borderRadius:
+                                                    BorderRadius.circular(16),
                                                 child: Container(
-                                                  padding: const EdgeInsets.all(20),
+                                                  padding: const EdgeInsets.all(
+                                                    20,
+                                                  ),
                                                   decoration: BoxDecoration(
                                                     border: Border.all(
-                                                      color: Theme.of(context).brightness == Brightness.dark
-                                                          ? const Color(0xFF4A5568)
-                                                          : const Color(0xFFE2E8F0),
+                                                      color:
+                                                          Theme.of(
+                                                                context,
+                                                              ).brightness ==
+                                                              Brightness.dark
+                                                          ? const Color(
+                                                              0xFF4A5568,
+                                                            )
+                                                          : const Color(
+                                                              0xFFE2E8F0,
+                                                            ),
                                                       width: 1.5,
                                                     ),
-                                                    borderRadius: BorderRadius.circular(16),
+                                                    borderRadius:
+                                                        BorderRadius.circular(
+                                                          16,
+                                                        ),
                                                     gradient: LinearGradient(
                                                       begin: Alignment.topLeft,
-                                                      end: Alignment.bottomRight,
-                                                      colors: Theme.of(context).brightness == Brightness.dark
+                                                      end:
+                                                          Alignment.bottomRight,
+                                                      colors:
+                                                          Theme.of(
+                                                                context,
+                                                              ).brightness ==
+                                                              Brightness.dark
                                                           ? [
-                                                              const Color(0xFF10B981).withOpacity(0.15),
-                                                              const Color(0xFF059669).withOpacity(0.08),
+                                                              const Color(
+                                                                0xFF10B981,
+                                                              ).withOpacity(
+                                                                0.15,
+                                                              ),
+                                                              const Color(
+                                                                0xFF059669,
+                                                              ).withOpacity(
+                                                                0.08,
+                                                              ),
                                                             ]
                                                           : [
-                                                              const Color(0xFF10B981).withOpacity(0.05),
-                                                              const Color(0xFF059669).withOpacity(0.02),
+                                                              const Color(
+                                                                0xFF10B981,
+                                                              ).withOpacity(
+                                                                0.05,
+                                                              ),
+                                                              const Color(
+                                                                0xFF059669,
+                                                              ).withOpacity(
+                                                                0.02,
+                                                              ),
                                                             ],
                                                     ),
                                                   ),
                                                   child: Row(
                                                     children: [
                                                       Container(
-                                                        padding: const EdgeInsets.all(12),
+                                                        padding:
+                                                            const EdgeInsets.all(
+                                                              12,
+                                                            ),
                                                         decoration: BoxDecoration(
-                                                          color: Theme.of(context).brightness == Brightness.dark
-                                                              ? const Color(0xFF10B981).withOpacity(0.2)
-                                                              : const Color(0xFF10B981).withOpacity(0.1),
-                                                          borderRadius: BorderRadius.circular(12),
+                                                          color:
+                                                              Theme.of(
+                                                                    context,
+                                                                  ).brightness ==
+                                                                  Brightness
+                                                                      .dark
+                                                              ? const Color(
+                                                                  0xFF10B981,
+                                                                ).withOpacity(
+                                                                  0.2,
+                                                                )
+                                                              : const Color(
+                                                                  0xFF10B981,
+                                                                ).withOpacity(
+                                                                  0.1,
+                                                                ),
+                                                          borderRadius:
+                                                              BorderRadius.circular(
+                                                                12,
+                                                              ),
                                                         ),
                                                         child: Icon(
                                                           Icons.edit_outlined,
-                                                          color: Theme.of(context).brightness == Brightness.dark
-                                                              ? const Color(0xFF34D399)
-                                                              : const Color(0xFF059669),
+                                                          color:
+                                                              Theme.of(
+                                                                    context,
+                                                                  ).brightness ==
+                                                                  Brightness
+                                                                      .dark
+                                                              ? const Color(
+                                                                  0xFF34D399,
+                                                                )
+                                                              : const Color(
+                                                                  0xFF059669,
+                                                                ),
                                                           size: 24,
                                                         ),
                                                       ),
                                                       const SizedBox(width: 16),
                                                       Expanded(
                                                         child: Column(
-                                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                                          crossAxisAlignment:
+                                                              CrossAxisAlignment
+                                                                  .start,
                                                           children: [
                                                             Text(
                                                               'Manual Entry',
                                                               style: TextStyle(
                                                                 fontSize: 16,
-                                                                fontWeight: FontWeight.w600,
-                                                                color: Theme.of(context).brightness == Brightness.dark
-                                                                    ? Colors.white
-                                                                    : const Color(0xFF1A202C),
+                                                                fontWeight:
+                                                                    FontWeight
+                                                                        .w600,
+                                                                color:
+                                                                    Theme.of(
+                                                                          context,
+                                                                        ).brightness ==
+                                                                        Brightness
+                                                                            .dark
+                                                                    ? Colors
+                                                                          .white
+                                                                    : const Color(
+                                                                        0xFF1A202C,
+                                                                      ),
                                                               ),
                                                             ),
                                                             SizedBox(height: 4),
@@ -3075,9 +3464,18 @@ class _GroupsScreenState extends ConsumerState<GroupsScreen> {
                                                               'Enter expense details manually',
                                                               style: TextStyle(
                                                                 fontSize: 14,
-                                                                color: Theme.of(context).brightness == Brightness.dark
-                                                                    ? const Color(0xFFA0AEC0)
-                                                                    : const Color(0xFF718096),
+                                                                color:
+                                                                    Theme.of(
+                                                                          context,
+                                                                        ).brightness ==
+                                                                        Brightness
+                                                                            .dark
+                                                                    ? const Color(
+                                                                        0xFFA0AEC0,
+                                                                      )
+                                                                    : const Color(
+                                                                        0xFF718096,
+                                                                      ),
                                                               ),
                                                             ),
                                                           ],
@@ -3085,9 +3483,17 @@ class _GroupsScreenState extends ConsumerState<GroupsScreen> {
                                                       ),
                                                       Icon(
                                                         Icons.chevron_right,
-                                                        color: Theme.of(context).brightness == Brightness.dark
-                                                            ? const Color(0xFFA0AEC0)
-                                                            : const Color(0xFF718096),
+                                                        color:
+                                                            Theme.of(
+                                                                  context,
+                                                                ).brightness ==
+                                                                Brightness.dark
+                                                            ? const Color(
+                                                                0xFFA0AEC0,
+                                                              )
+                                                            : const Color(
+                                                                0xFF718096,
+                                                              ),
                                                         size: 20,
                                                       ),
                                                     ],
@@ -3096,9 +3502,9 @@ class _GroupsScreenState extends ConsumerState<GroupsScreen> {
                                               ),
                                             ),
                                           ),
-                                          
+
                                           // Receipt scan option
-                                          Container(
+                                          SizedBox(
                                             width: double.infinity,
                                             child: Material(
                                               color: Colors.transparent,
@@ -3107,62 +3513,138 @@ class _GroupsScreenState extends ConsumerState<GroupsScreen> {
                                                   Navigator.of(ctx).pop();
                                                   context.go('/scan');
                                                 },
-                                                borderRadius: BorderRadius.circular(16),
+                                                borderRadius:
+                                                    BorderRadius.circular(16),
                                                 child: Container(
-                                                  padding: const EdgeInsets.all(20),
+                                                  padding: const EdgeInsets.all(
+                                                    20,
+                                                  ),
                                                   decoration: BoxDecoration(
                                                     border: Border.all(
-                                                      color: Theme.of(context).brightness == Brightness.dark
-                                                          ? const Color(0xFF4A5568)
-                                                          : const Color(0xFFE2E8F0),
+                                                      color:
+                                                          Theme.of(
+                                                                context,
+                                                              ).brightness ==
+                                                              Brightness.dark
+                                                          ? const Color(
+                                                              0xFF4A5568,
+                                                            )
+                                                          : const Color(
+                                                              0xFFE2E8F0,
+                                                            ),
                                                       width: 1.5,
                                                     ),
-                                                    borderRadius: BorderRadius.circular(16),
+                                                    borderRadius:
+                                                        BorderRadius.circular(
+                                                          16,
+                                                        ),
                                                     gradient: LinearGradient(
                                                       begin: Alignment.topLeft,
-                                                      end: Alignment.bottomRight,
-                                                      colors: Theme.of(context).brightness == Brightness.dark
+                                                      end:
+                                                          Alignment.bottomRight,
+                                                      colors:
+                                                          Theme.of(
+                                                                context,
+                                                              ).brightness ==
+                                                              Brightness.dark
                                                           ? [
-                                                              const Color(0xFF8B5CF6).withOpacity(0.15),
-                                                              const Color(0xFF7C3AED).withOpacity(0.08),
+                                                              const Color(
+                                                                0xFF8B5CF6,
+                                                              ).withOpacity(
+                                                                0.15,
+                                                              ),
+                                                              const Color(
+                                                                0xFF7C3AED,
+                                                              ).withOpacity(
+                                                                0.08,
+                                                              ),
                                                             ]
                                                           : [
-                                                              const Color(0xFF8B5CF6).withOpacity(0.05),
-                                                              const Color(0xFF7C3AED).withOpacity(0.02),
+                                                              const Color(
+                                                                0xFF8B5CF6,
+                                                              ).withOpacity(
+                                                                0.05,
+                                                              ),
+                                                              const Color(
+                                                                0xFF7C3AED,
+                                                              ).withOpacity(
+                                                                0.02,
+                                                              ),
                                                             ],
                                                     ),
                                                   ),
                                                   child: Row(
                                                     children: [
                                                       Container(
-                                                        padding: const EdgeInsets.all(12),
+                                                        padding:
+                                                            const EdgeInsets.all(
+                                                              12,
+                                                            ),
                                                         decoration: BoxDecoration(
-                                                          color: Theme.of(context).brightness == Brightness.dark
-                                                              ? const Color(0xFF8B5CF6).withOpacity(0.2)
-                                                              : const Color(0xFF8B5CF6).withOpacity(0.1),
-                                                          borderRadius: BorderRadius.circular(12),
+                                                          color:
+                                                              Theme.of(
+                                                                    context,
+                                                                  ).brightness ==
+                                                                  Brightness
+                                                                      .dark
+                                                              ? const Color(
+                                                                  0xFF8B5CF6,
+                                                                ).withOpacity(
+                                                                  0.2,
+                                                                )
+                                                              : const Color(
+                                                                  0xFF8B5CF6,
+                                                                ).withOpacity(
+                                                                  0.1,
+                                                                ),
+                                                          borderRadius:
+                                                              BorderRadius.circular(
+                                                                12,
+                                                              ),
                                                         ),
                                                         child: Icon(
-                                                          Icons.camera_alt_outlined,
-                                                          color: Theme.of(context).brightness == Brightness.dark
-                                                              ? const Color(0xFFA78BFA)
-                                                              : const Color(0xFF7C3AED),
+                                                          Icons
+                                                              .camera_alt_outlined,
+                                                          color:
+                                                              Theme.of(
+                                                                    context,
+                                                                  ).brightness ==
+                                                                  Brightness
+                                                                      .dark
+                                                              ? const Color(
+                                                                  0xFFA78BFA,
+                                                                )
+                                                              : const Color(
+                                                                  0xFF7C3AED,
+                                                                ),
                                                           size: 24,
                                                         ),
                                                       ),
                                                       const SizedBox(width: 16),
                                                       Expanded(
                                                         child: Column(
-                                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                                          crossAxisAlignment:
+                                                              CrossAxisAlignment
+                                                                  .start,
                                                           children: [
                                                             Text(
                                                               'Scan Receipt',
                                                               style: TextStyle(
                                                                 fontSize: 16,
-                                                                fontWeight: FontWeight.w600,
-                                                                color: Theme.of(context).brightness == Brightness.dark
-                                                                    ? Colors.white
-                                                                    : const Color(0xFF1A202C),
+                                                                fontWeight:
+                                                                    FontWeight
+                                                                        .w600,
+                                                                color:
+                                                                    Theme.of(
+                                                                          context,
+                                                                        ).brightness ==
+                                                                        Brightness
+                                                                            .dark
+                                                                    ? Colors
+                                                                          .white
+                                                                    : const Color(
+                                                                        0xFF1A202C,
+                                                                      ),
                                                               ),
                                                             ),
                                                             SizedBox(height: 4),
@@ -3170,9 +3652,18 @@ class _GroupsScreenState extends ConsumerState<GroupsScreen> {
                                                               'Use camera to capture receipt',
                                                               style: TextStyle(
                                                                 fontSize: 14,
-                                                                color: Theme.of(context).brightness == Brightness.dark
-                                                                    ? const Color(0xFFA0AEC0)
-                                                                    : const Color(0xFF718096),
+                                                                color:
+                                                                    Theme.of(
+                                                                          context,
+                                                                        ).brightness ==
+                                                                        Brightness
+                                                                            .dark
+                                                                    ? const Color(
+                                                                        0xFFA0AEC0,
+                                                                      )
+                                                                    : const Color(
+                                                                        0xFF718096,
+                                                                      ),
                                                               ),
                                                             ),
                                                           ],
@@ -3180,9 +3671,17 @@ class _GroupsScreenState extends ConsumerState<GroupsScreen> {
                                                       ),
                                                       Icon(
                                                         Icons.chevron_right,
-                                                        color: Theme.of(context).brightness == Brightness.dark
-                                                            ? const Color(0xFFA0AEC0)
-                                                            : const Color(0xFF718096),
+                                                        color:
+                                                            Theme.of(
+                                                                  context,
+                                                                ).brightness ==
+                                                                Brightness.dark
+                                                            ? const Color(
+                                                                0xFFA0AEC0,
+                                                              )
+                                                            : const Color(
+                                                                0xFF718096,
+                                                              ),
                                                         size: 20,
                                                       ),
                                                     ],
@@ -3264,17 +3763,26 @@ class _GroupsScreenState extends ConsumerState<GroupsScreen> {
     );
   }
 
-  Widget _buildExpensesList(BuildContext context, WidgetRef ref, Group group, bool devMode) {
+  Widget _buildExpensesList(
+    BuildContext context,
+    WidgetRef ref,
+    Group group,
+    bool devMode,
+  ) {
     if (devMode) {
       // Show developer expenses
       final groupExpenses = ref.watch(developerExpensesProvider(group.id));
-      
+
       if (groupExpenses.isEmpty) {
         return Container(
           padding: const EdgeInsets.all(20),
           child: Column(
             children: [
-              Icon(Icons.add_circle_outline, size: 32, color: const Color(0xFF4A5568)),
+              Icon(
+                Icons.add_circle_outline,
+                size: 32,
+                color: const Color(0xFF4A5568),
+              ),
               const SizedBox(height: 8),
               Text(
                 'Add your first expense',
@@ -3287,16 +3795,13 @@ class _GroupsScreenState extends ConsumerState<GroupsScreen> {
               const SizedBox(height: 4),
               Text(
                 'Tap the + button to get started',
-                style: TextStyle(
-                  fontSize: 12,
-                  color: const Color(0xFF718096),
-                ),
+                style: TextStyle(fontSize: 12, color: const Color(0xFF718096)),
               ),
             ],
           ),
         );
       }
-      
+
       return Column(
         children: groupExpenses.take(3).map((expense) {
           return Container(
@@ -3362,27 +3867,34 @@ class _GroupsScreenState extends ConsumerState<GroupsScreen> {
     } else {
       // Show real expenses from Firestore
       return StreamBuilder<List<Expense>>(
-        stream: ref.watch(firestoreRepositoryProvider).watchExpenses(group.id).timeout(
-          const Duration(seconds: 5),
-          onTimeout: (sink) => sink.add([]), // Return empty list on timeout
-        ),
+        stream: ref
+            .watch(firestoreRepositoryProvider)
+            .watchExpenses(group.id)
+            .timeout(
+              const Duration(seconds: 5),
+              onTimeout: (sink) => sink.add([]), // Return empty list on timeout
+            ),
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting) {
             return const Center(child: CircularProgressIndicator());
           }
-          
+
           if (snapshot.hasError) {
             return Text('Error: ${snapshot.error}');
           }
-          
+
           final expenses = snapshot.data ?? [];
-          
+
           if (expenses.isEmpty) {
             return Container(
               padding: const EdgeInsets.all(20),
               child: Column(
                 children: [
-                  Icon(Icons.add_circle_outline, size: 32, color: const Color(0xFF4A5568)),
+                  Icon(
+                    Icons.add_circle_outline,
+                    size: 32,
+                    color: const Color(0xFF4A5568),
+                  ),
                   const SizedBox(height: 8),
                   Text(
                     'Add your first expense',
@@ -3404,7 +3916,7 @@ class _GroupsScreenState extends ConsumerState<GroupsScreen> {
               ),
             );
           }
-          
+
           return Column(
             children: expenses.take(3).map((expense) {
               return Container(
@@ -3488,7 +4000,7 @@ class _GroupsScreenState extends ConsumerState<GroupsScreen> {
 
   String _getUserInitials(String userId) {
     final displayName = _getUserDisplayName(userId);
-    
+
     // Split into words and take first letter of each
     final words = displayName.split(' ');
     if (words.length >= 2) {
@@ -3513,7 +4025,7 @@ class _GroupsScreenState extends ConsumerState<GroupsScreen> {
       );
       return;
     }
-    
+
     // Copy to clipboard
     Clipboard.setData(ClipboardData(text: shareCode)).then((_) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -3541,57 +4053,72 @@ class _GroupsScreenState extends ConsumerState<GroupsScreen> {
       return;
     }
 
-    // Generate a shareable link
     final shareLink = 'https://expense-splitter.app/join/${group.shareCode}';
-    final shareText = '''
-Join "${group.name}" on Expense Splitter!
+    final shareText =
+        '''
+Join "${group.name}" on dela!
 
-Use this link: $shareLink
-Or enter share code: ${group.shareCode}
+Scan the QR code or use this link: $shareLink
+Or enter group code: ${group.shareCode}
 
-Expense Splitter makes it easy to split bills and track expenses with friends!
+dela makes it easy to split bills and track expenses with friends!
 ''';
 
-    // In a real app, you would use Share.share() from the share_plus package
-    // For now, we'll show a dialog with the shareable content
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
         title: Row(
           children: [
-            Icon(Icons.share, color: Theme.of(context).colorScheme.primary),
+            Icon(Icons.qr_code, color: Theme.of(context).colorScheme.primary),
             const SizedBox(width: 8),
             const Text('Share Group'),
           ],
         ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'Share this message with others:',
-              style: TextStyle(fontWeight: FontWeight.w600),
-            ),
-            const SizedBox(height: 12),
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: Theme.of(context).brightness == Brightness.dark
-                    ? Colors.grey.shade800
-                    : Colors.grey.shade100,
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(
-                  color: Theme.of(context).brightness == Brightness.dark
-                      ? Colors.grey.shade600
-                      : Colors.grey.shade300,
+        content: SizedBox(
+          width: 320,
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                const Text(
+                  'Scan this QR code to join:',
+                  style: TextStyle(fontWeight: FontWeight.w600),
                 ),
-              ),
-              child: Text(
-                shareText,
-                style: const TextStyle(fontSize: 14),
-              ),
+                const SizedBox(height: 12),
+                Center(
+                  child: QrImageView(
+                    data: shareLink,
+                    version: QrVersions.auto,
+                    size: 180.0,
+                    backgroundColor: Colors.white,
+                  ),
+                ),
+                const SizedBox(height: 16),
+                Text(
+                  'Or enter group code:',
+                  style: TextStyle(fontWeight: FontWeight.w500),
+                ),
+                SelectableText(
+                  group.shareCode!,
+                  style: const TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.bold,
+                    letterSpacing: 2,
+                  ),
+                ),
+                const SizedBox(height: 16),
+                Text(
+                  'Or use this link:',
+                  style: TextStyle(fontWeight: FontWeight.w500),
+                ),
+                SelectableText(
+                  shareLink,
+                  style: const TextStyle(fontSize: 14, color: Colors.blue),
+                ),
+              ],
             ),
-          ],
+          ),
         ),
         actions: [
           TextButton(
@@ -3600,7 +4127,6 @@ Expense Splitter makes it easy to split bills and track expenses with friends!
           ),
           ElevatedButton.icon(
             onPressed: () {
-              // Copy the share message to clipboard
               Clipboard.setData(ClipboardData(text: shareText)).then((_) {
                 Navigator.of(context).pop();
                 ScaffoldMessenger.of(context).showSnackBar(
@@ -3611,8 +4137,8 @@ Expense Splitter makes it easy to split bills and track expenses with friends!
                 );
               });
             },
-            icon: const Icon(Icons.copy, size: 18),
-            label: const Text('Copy'),
+            icon: const Icon(Icons.copy),
+            label: const Text('Copy Message'),
           ),
         ],
       ),
@@ -3641,10 +4167,10 @@ Expense Splitter makes it easy to split bills and track expenses with friends!
             onPressed: () async {
               final name = nameController.text.trim();
               if (name.isEmpty) return;
-              
+
               final devMode = ref.read(developerModeProvider);
               final currentUser = ref.read(currentUserProvider);
-              
+
               if (devMode && currentUser != null) {
                 // In developer mode, add to the developer groups provider
                 final newGroup = Group(
@@ -3652,7 +4178,9 @@ Expense Splitter makes it easy to split bills and track expenses with friends!
                   name: name,
                   memberUserIds: [currentUser.uid],
                   createdAtMs: DateTime.now().millisecondsSinceEpoch,
-                  shareCode: '${DateTime.now().millisecondsSinceEpoch % 1000000}'.padLeft(6, '0'),
+                  shareCode:
+                      '${DateTime.now().millisecondsSinceEpoch % 1000000}'
+                          .padLeft(6, '0'),
                 );
                 ref.read(developerGroupsProvider.notifier).addGroup(newGroup);
                 Navigator.pop(context);
@@ -3702,7 +4230,7 @@ Expense Splitter makes it easy to split bills and track expenses with friends!
 
   void _handleGroupSettle(BuildContext context, WidgetRef ref, Group group) {
     final devMode = ref.watch(developerModeProvider);
-    
+
     if (!devMode) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -3712,10 +4240,10 @@ Expense Splitter makes it easy to split bills and track expenses with friends!
       );
       return;
     }
-    
+
     // Get expenses for this group
     final expenses = ref.watch(developerExpensesProvider(group.id));
-    
+
     if (expenses.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -3725,10 +4253,10 @@ Expense Splitter makes it easy to split bills and track expenses with friends!
       );
       return;
     }
-    
+
     // Calculate settlements
     final settlements = _calculateGroupSettlementsForCard(group, expenses);
-    
+
     if (settlements.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -3738,7 +4266,7 @@ Expense Splitter makes it easy to split bills and track expenses with friends!
       );
       return;
     }
-    
+
     // Show settlement options with enhanced tracking
     showModalBottomSheet(
       context: context,
@@ -3751,19 +4279,28 @@ Expense Splitter makes it easy to split bills and track expenses with friends!
     );
   }
 
-  void _showGroupSettingsDialog(BuildContext context, WidgetRef ref, Group group) {
+  void _showGroupSettingsDialog(
+    BuildContext context,
+    WidgetRef ref,
+    Group group,
+  ) {
     const String currentUserId = 'dev_user_123'; // In real app, get from auth
-    final bool isOwner = group.memberUserIds.isNotEmpty && group.memberUserIds.first == currentUserId;
-    
+    final bool isOwner =
+        group.memberUserIds.isNotEmpty &&
+        group.memberUserIds.first == currentUserId;
+
     showDialog(
       context: context,
       builder: (context) {
-        String? _editedGroupName = group.name;
+        String? editedGroupName = group.name;
         return StatefulBuilder(
           builder: (context, setState) => AlertDialog(
             title: Row(
               children: [
-                Icon(Icons.settings, color: Theme.of(context).colorScheme.primary),
+                Icon(
+                  Icons.settings,
+                  color: Theme.of(context).colorScheme.primary,
+                ),
                 const SizedBox(width: 8),
                 Text('Group Settings'),
               ],
@@ -3773,57 +4310,135 @@ Expense Splitter makes it easy to split bills and track expenses with friends!
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-              // Group creation date
-              Text(
-                'Created: ' + DateTime.fromMillisecondsSinceEpoch(group.createdAtMs).toLocal().toString().split(' ').first,
-                style: TextStyle(fontSize: 13, color: Colors.grey.shade600),
-              ),
-              const SizedBox(height: 16),
-              // Editable group name
-              Row(
-                children: [
-                  Expanded(
-                    child: TextFormField(
-                      initialValue: group.name,
-                      decoration: const InputDecoration(
-                        labelText: 'Group Name',
-                        border: OutlineInputBorder(),
-                        isDense: true,
+                  // Group creation date
+                  Text(
+                    'Created: ${DateTime.fromMillisecondsSinceEpoch(group.createdAtMs).toLocal().toString().split(' ').first}',
+                    style: TextStyle(fontSize: 13, color: Colors.grey.shade600),
+                  ),
+                  const SizedBox(height: 16),
+                  // Editable group name
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextFormField(
+                          initialValue: group.name,
+                          decoration: const InputDecoration(
+                            labelText: 'Group Name',
+                            border: OutlineInputBorder(),
+                            isDense: true,
+                          ),
+                          onChanged: (value) =>
+                              setState(() => editedGroupName = value),
+                        ),
                       ),
-                      onChanged: (value) => setState(() => _editedGroupName = value),
+                      const SizedBox(width: 8),
+                      ElevatedButton(
+                        onPressed: () async {
+                          if (editedGroupName != null &&
+                              editedGroupName!.trim().isNotEmpty &&
+                              editedGroupName != group.name) {
+                            final updated = group.copyWith(
+                              name: editedGroupName!.trim(),
+                            );
+                            ref
+                                .read(developerGroupsProvider.notifier)
+                                .updateGroup(updated);
+                            Navigator.of(context).pop();
+                            _showGroupSettingsDialog(context, ref, updated);
+                          }
+                        },
+                        child: const Text('Save'),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 20),
+                  // User list with remove buttons
+                  Text(
+                    'Members:',
+                    style: TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(height: 8),
+                  ...group.memberUserIds.map(
+                    (userId) => ListTile(
+                      leading: _buildUserAvatar(userId, ref, size: 28),
+                      title: Text(_getUserDisplayName(userId)),
+                      trailing: isOwner && userId != currentUserId
+                          ? IconButton(
+                              icon: const Icon(
+                                Icons.remove_circle,
+                                color: Colors.red,
+                              ),
+                              tooltip: 'Remove',
+                              onPressed: () async {
+                                final confirm = await showDialog<bool>(
+                                  context: context,
+                                  builder: (ctx) => AlertDialog(
+                                    title: const Text('Remove Member'),
+                                    content: Text(
+                                      'Remove ${_getUserDisplayName(userId)} from the group?',
+                                    ),
+                                    actions: [
+                                      TextButton(
+                                        onPressed: () =>
+                                            Navigator.of(ctx).pop(false),
+                                        child: const Text('Cancel'),
+                                      ),
+                                      TextButton(
+                                        onPressed: () =>
+                                            Navigator.of(ctx).pop(true),
+                                        child: const Text(
+                                          'Remove',
+                                          style: TextStyle(color: Colors.red),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                );
+                                if (confirm == true) {
+                                  final updated = group.copyWith(
+                                    memberUserIds: List.of(group.memberUserIds)
+                                      ..remove(userId),
+                                  );
+                                  ref
+                                      .read(developerGroupsProvider.notifier)
+                                      .updateGroup(updated);
+                                  Navigator.of(context).pop();
+                                  _showGroupSettingsDialog(
+                                    context,
+                                    ref,
+                                    updated,
+                                  );
+                                }
+                              },
+                            )
+                          : null,
                     ),
                   ),
-                  const SizedBox(width: 8),
-                  ElevatedButton(
-                    onPressed: () async {
-                      if (_editedGroupName != null && _editedGroupName!.trim().isNotEmpty && _editedGroupName != group.name) {
-                        final updated = group.copyWith(name: _editedGroupName!.trim());
-                        ref.read(developerGroupsProvider.notifier).updateGroup(updated);
-                        Navigator.of(context).pop();
-                        _showGroupSettingsDialog(context, ref, updated);
-                      }
-                    },
-                    child: const Text('Save'),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 20),
-              // User list with remove buttons
-              Text('Members:', style: TextStyle(fontWeight: FontWeight.bold)),
-              const SizedBox(height: 8),
-              ...group.memberUserIds.map((userId) => ListTile(
-                leading: _buildUserAvatar(userId, ref, size: 28),
-                title: Text(_getUserDisplayName(userId)),
-                trailing: isOwner && userId != currentUserId
-                  ? IconButton(
-                      icon: const Icon(Icons.remove_circle, color: Colors.red),
-                      tooltip: 'Remove',
+                  const SizedBox(height: 24),
+                  Divider(),
+                  Center(
+                    child: ElevatedButton.icon(
+                      icon: const Icon(
+                        Icons.delete_forever,
+                        color: Colors.white,
+                      ),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.red,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 32,
+                          vertical: 16,
+                        ),
+                      ),
+                      label: const Text('Delete Group'),
                       onPressed: () async {
                         final confirm = await showDialog<bool>(
                           context: context,
                           builder: (ctx) => AlertDialog(
-                            title: const Text('Remove Member'),
-                            content: Text('Remove ${_getUserDisplayName(userId)} from the group?'),
+                            title: const Text('Delete Group'),
+                            content: const Text(
+                              'Are you sure you want to delete this group? This cannot be undone.',
+                            ),
                             actions: [
                               TextButton(
                                 onPressed: () => Navigator.of(ctx).pop(false),
@@ -3831,80 +4446,51 @@ Expense Splitter makes it easy to split bills and track expenses with friends!
                               ),
                               TextButton(
                                 onPressed: () => Navigator.of(ctx).pop(true),
-                                child: const Text('Remove', style: TextStyle(color: Colors.red)),
+                                child: const Text(
+                                  'Delete',
+                                  style: TextStyle(color: Colors.red),
+                                ),
                               ),
                             ],
                           ),
                         );
                         if (confirm == true) {
-                          final updated = group.copyWith(memberUserIds: List.of(group.memberUserIds)..remove(userId));
-                          ref.read(developerGroupsProvider.notifier).updateGroup(updated);
-                          Navigator.of(context).pop();
-                          _showGroupSettingsDialog(context, ref, updated);
+                          await ref
+                              .read(firestoreRepositoryProvider)
+                              .deleteGroup(group.id);
+                          if (context.mounted) {
+                            Navigator.of(
+                              context,
+                            ).pop(); // Close settings dialog
+                            context.go('/groups');
+                          }
                         }
                       },
-                    )
-                  : null,
-              )),
-              const SizedBox(height: 24),
-              Divider(),
-              Center(
-                child: ElevatedButton.icon(
-                  icon: const Icon(Icons.delete_forever, color: Colors.white),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.red,
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
+                    ),
                   ),
-                  label: const Text('Delete Group'),
-                  onPressed: () async {
-                    final confirm = await showDialog<bool>(
-                      context: context,
-                      builder: (ctx) => AlertDialog(
-                        title: const Text('Delete Group'),
-                        content: const Text('Are you sure you want to delete this group? This cannot be undone.'),
-                        actions: [
-                          TextButton(
-                            onPressed: () => Navigator.of(ctx).pop(false),
-                            child: const Text('Cancel'),
-                          ),
-                          TextButton(
-                            onPressed: () => Navigator.of(ctx).pop(true),
-                            child: const Text('Delete', style: TextStyle(color: Colors.red)),
-                          ),
-                        ],
-                      ),
-                    );
-                    if (confirm == true) {
-                      await ref.read(firestoreRepositoryProvider).deleteGroup(group.id);
-                      if (context.mounted) {
-                        Navigator.of(context).pop(); // Close settings dialog
-                        context.go('/groups');
-                      }
-                    }
-                  },
-                ),
+                ],
               ),
-            ],
+            ),
           ),
-        ),
-      ),
+        );
+      },
     );
-  },
-);
-}
+  }
 
   void _showAddMemberDialog(BuildContext context, WidgetRef ref, Group group) {
     final TextEditingController contactController = TextEditingController();
     String contactMethod = 'phone'; // Default to phone
-    
+
     showDialog(
       context: context,
       builder: (context) => StatefulBuilder(
         builder: (context, setState) => AlertDialog(
           title: Row(
             children: [
-              Icon(Icons.person_add, color: Theme.of(context).colorScheme.primary),
+              Icon(
+                Icons.person_add,
+                color: Theme.of(context).colorScheme.primary,
+              ),
               const SizedBox(width: 8),
               const Text('Invite Member'),
             ],
@@ -3922,7 +4508,10 @@ Expense Splitter makes it easy to split bills and track expenses with friends!
                     child: RadioListTile<String>(
                       dense: true,
                       contentPadding: EdgeInsets.zero,
-                      title: const Text('Phone Number', style: TextStyle(fontSize: 14)),
+                      title: const Text(
+                        'Phone Number',
+                        style: TextStyle(fontSize: 14),
+                      ),
                       value: 'phone',
                       groupValue: contactMethod,
                       onChanged: (value) {
@@ -3937,7 +4526,10 @@ Expense Splitter makes it easy to split bills and track expenses with friends!
                     child: RadioListTile<String>(
                       dense: true,
                       contentPadding: EdgeInsets.zero,
-                      title: const Text('Email', style: TextStyle(fontSize: 14)),
+                      title: const Text(
+                        'Email',
+                        style: TextStyle(fontSize: 14),
+                      ),
                       value: 'email',
                       groupValue: contactMethod,
                       onChanged: (value) {
@@ -3954,12 +4546,20 @@ Expense Splitter makes it easy to split bills and track expenses with friends!
               TextField(
                 controller: contactController,
                 decoration: InputDecoration(
-                  labelText: contactMethod == 'phone' ? 'Phone Number' : 'Email Address',
-                  hintText: contactMethod == 'phone' ? '+46 70 123 45 67' : 'example@email.com',
+                  labelText: contactMethod == 'phone'
+                      ? 'Phone Number'
+                      : 'Email Address',
+                  hintText: contactMethod == 'phone'
+                      ? '+46 70 123 45 67'
+                      : 'example@email.com',
                   border: const OutlineInputBorder(),
-                  prefixIcon: Icon(contactMethod == 'phone' ? Icons.phone : Icons.email),
+                  prefixIcon: Icon(
+                    contactMethod == 'phone' ? Icons.phone : Icons.email,
+                  ),
                 ),
-                keyboardType: contactMethod == 'phone' ? TextInputType.phone : TextInputType.emailAddress,
+                keyboardType: contactMethod == 'phone'
+                    ? TextInputType.phone
+                    : TextInputType.emailAddress,
               ),
               const SizedBox(height: 16),
               Container(
@@ -3975,9 +4575,9 @@ Expense Splitter makes it easy to split bills and track expenses with friends!
                     const SizedBox(width: 8),
                     Expanded(
                       child: Text(
-                        contactMethod == 'phone' 
-                          ? 'An invitation will be sent via SMS. They\'ll join with their registered name.'
-                          : 'An invitation will be sent via email. They\'ll join with their registered name.',
+                        contactMethod == 'phone'
+                            ? 'An invitation will be sent via SMS. They\'ll join with their registered name.'
+                            : 'An invitation will be sent via email. They\'ll join with their registered name.',
                         style: TextStyle(
                           fontSize: 12,
                           color: Colors.blue.shade700,
@@ -3999,7 +4599,13 @@ Expense Splitter makes it easy to split bills and track expenses with friends!
                 final contact = contactController.text.trim();
                 if (contact.isNotEmpty) {
                   Navigator.of(context).pop();
-                  _inviteMemberToGroup(context, ref, group, contact, contactMethod);
+                  _inviteMemberToGroup(
+                    context,
+                    ref,
+                    group,
+                    contact,
+                    contactMethod,
+                  );
                 }
               },
               child: const Text('Send Invitation'),
@@ -4010,9 +4616,14 @@ Expense Splitter makes it easy to split bills and track expenses with friends!
     );
   }
 
-  void _showRemoveMemberDialog(BuildContext context, WidgetRef ref, Group group, String userId) {
+  void _showRemoveMemberDialog(
+    BuildContext context,
+    WidgetRef ref,
+    Group group,
+    String userId,
+  ) {
     final memberName = _getUserDisplayName(userId);
-    
+
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
@@ -4075,67 +4686,91 @@ Expense Splitter makes it easy to split bills and track expenses with friends!
     );
   }
 
-  void _inviteMemberToGroup(BuildContext context, WidgetRef ref, Group group, String contact, String contactMethod) {
+  void _inviteMemberToGroup(
+    BuildContext context,
+    WidgetRef ref,
+    Group group,
+    String contact,
+    String contactMethod,
+  ) {
     // Simulate invitation process - in a real app, this would:
     // 1. Send SMS/email invitation with group join link
     // 2. When user accepts, they register with their name
     // 3. Their user profile provides the display name
-    
+
     // For demo purposes, generate a user based on contact info
     String newUserId;
     String simulatedName;
-    
+
     if (contactMethod == 'phone') {
-      // Extract number for ID generation  
+      // Extract number for ID generation
       final cleanNumber = contact.replaceAll(RegExp(r'[^0-9]'), '');
-      newUserId = 'user_phone_${cleanNumber.substring(cleanNumber.length > 6 ? cleanNumber.length - 6 : 0)}';
-      simulatedName = 'User ${cleanNumber.substring(cleanNumber.length > 4 ? cleanNumber.length - 4 : 0)}'; // Last 4 digits
+      newUserId =
+          'user_phone_${cleanNumber.substring(cleanNumber.length > 6 ? cleanNumber.length - 6 : 0)}';
+      simulatedName =
+          'User ${cleanNumber.substring(cleanNumber.length > 4 ? cleanNumber.length - 4 : 0)}'; // Last 4 digits
     } else {
       // Use email for ID generation
       final emailUser = contact.split('@').first.toLowerCase();
       newUserId = 'user_email_$emailUser';
-      simulatedName = emailUser.split('.').map((part) => 
-        part.isEmpty ? '' : '${part[0].toUpperCase()}${part.substring(1)}'
-      ).join(' ');
+      simulatedName = emailUser
+          .split('.')
+          .map(
+            (part) => part.isEmpty
+                ? ''
+                : '${part[0].toUpperCase()}${part.substring(1)}',
+          )
+          .join(' ');
     }
-    
+
     // Check if user already exists (by contact)
     if (group.memberUserIds.contains(newUserId)) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('This ${contactMethod} is already a member of this group'),
+          content: Text(
+            'This $contactMethod is already a member of this group',
+          ),
           backgroundColor: Colors.orange,
         ),
       );
       return;
     }
-    
+
     // Add the new member to the group
     final updatedMemberIds = [...group.memberUserIds, newUserId];
     final updatedGroup = group.copyWith(memberUserIds: updatedMemberIds);
-    
+
     // Update the developer groups provider
     ref.read(developerGroupsProvider.notifier).updateGroup(updatedGroup);
-    
+
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text('Invitation sent to $contact. They will appear as "$simulatedName" when they join.'),
+        content: Text(
+          'Invitation sent to $contact. They will appear as "$simulatedName" when they join.',
+        ),
         backgroundColor: Colors.green,
         duration: const Duration(seconds: 4),
       ),
     );
   }
 
-  void _removeMemberFromGroup(BuildContext context, WidgetRef ref, Group group, String userId) {
+  void _removeMemberFromGroup(
+    BuildContext context,
+    WidgetRef ref,
+    Group group,
+    String userId,
+  ) {
     final memberName = _getUserDisplayName(userId);
-    
+
     // Remove the member from the group
-    final updatedMemberIds = group.memberUserIds.where((id) => id != userId).toList();
+    final updatedMemberIds = group.memberUserIds
+        .where((id) => id != userId)
+        .toList();
     final updatedGroup = group.copyWith(memberUserIds: updatedMemberIds);
-    
+
     // Update the developer groups provider
     ref.read(developerGroupsProvider.notifier).updateGroup(updatedGroup);
-    
+
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text('$memberName has been removed from the group'),
@@ -4143,24 +4778,28 @@ Expense Splitter makes it easy to split bills and track expenses with friends!
       ),
     );
   }
-  
-  List<SettlementInfo> _calculateGroupSettlementsForCard(Group group, List<Expense> expenses) {
+
+  List<SettlementInfo> _calculateGroupSettlementsForCard(
+    Group group,
+    List<Expense> expenses,
+  ) {
     final balances = <String, int>{};
-    
+
     // Calculate net balance for each member
     for (final memberId in group.memberUserIds) {
-      final totalPaid = expenses.where((e) => e.paidByUserId == memberId)
+      final totalPaid = expenses
+          .where((e) => e.paidByUserId == memberId)
           .fold<int>(0, (sum, e) => sum + e.amountCents);
       final totalOwed = expenses.fold<int>(0, (sum, expense) {
         return sum + _getOwedAmountForCard(expense, memberId);
       });
       balances[memberId] = totalPaid - totalOwed;
     }
-    
+
     // Use greedy algorithm to minimize number of transactions
     return _greedyDebtSettlement(balances);
   }
-  
+
   int _getOwedAmountForCard(Expense expense, String userId) {
     switch (expense.splitMode) {
       case SplitMode.equal:
@@ -4172,12 +4811,13 @@ Expense Splitter makes it easy to split bills and track expenses with friends!
         return (expense.amountCents * percentage).round();
     }
   }
-  
+
   // Helper function to calculate user's balance in a specific group
   int _calculateUserBalanceInGroup(Group group, List<Expense> expenses) {
     final settlements = _calculateGroupSettlementsForCard(group, expenses);
-    final currentUserId = fb.FirebaseAuth.instance.currentUser?.uid ?? 'dev_user_123';
-    
+    final currentUserId =
+        fb.FirebaseAuth.instance.currentUser?.uid ?? 'dev_user_123';
+
     int userBalance = 0;
     for (final settlement in settlements) {
       if (settlement.debtorId == currentUserId) {
@@ -4195,20 +4835,27 @@ class _EnhancedSettlementBottomSheet extends StatelessWidget {
     required this.group,
     required this.settlements,
   });
-  
+
   final Group group;
   final List<SettlementInfo> settlements;
 
   @override
   Widget build(BuildContext context) {
-    final currentUserId = fb.FirebaseAuth.instance.currentUser?.uid ?? 'dev_user_123';
-    final isGroupCreator = group.memberUserIds.isNotEmpty && group.memberUserIds.first == currentUserId;
-    
+    final currentUserId =
+        fb.FirebaseAuth.instance.currentUser?.uid ?? 'dev_user_123';
+    final isGroupCreator =
+        group.memberUserIds.isNotEmpty &&
+        group.memberUserIds.first == currentUserId;
+
     // Calculate settlement statistics for smart privacy display
     final totalAmount = settlements.fold<int>(0, (sum, s) => sum + s.amount);
-    final myPayments = settlements.where((s) => s.debtorId == currentUserId).toList();
-    final paymentsToMe = settlements.where((s) => s.creditorId == currentUserId).toList();
-    
+    final myPayments = settlements
+        .where((s) => s.debtorId == currentUserId)
+        .toList();
+    final paymentsToMe = settlements
+        .where((s) => s.creditorId == currentUserId)
+        .toList();
+
     return Container(
       decoration: const BoxDecoration(
         color: Colors.white,
@@ -4230,7 +4877,7 @@ class _EnhancedSettlementBottomSheet extends StatelessWidget {
               borderRadius: BorderRadius.circular(2),
             ),
           ),
-          
+
           // Header with smart privacy info
           Padding(
             padding: const EdgeInsets.all(24),
@@ -4247,13 +4894,10 @@ class _EnhancedSettlementBottomSheet extends StatelessWidget {
                 const SizedBox(height: 8),
                 Text(
                   group.name,
-                  style: TextStyle(
-                    fontSize: 16,
-                    color: Colors.grey.shade600,
-                  ),
+                  style: TextStyle(fontSize: 16, color: Colors.grey.shade600),
                 ),
                 const SizedBox(height: 16),
-                
+
                 // Smart privacy summary
                 Container(
                   width: double.infinity,
@@ -4305,14 +4949,24 @@ class _EnhancedSettlementBottomSheet extends StatelessWidget {
                             if (myPayments.isNotEmpty)
                               _buildSummaryItem(
                                 'You Pay',
-                                _formatCents(myPayments.fold<int>(0, (sum, s) => sum + s.amount)),
+                                _formatCents(
+                                  myPayments.fold<int>(
+                                    0,
+                                    (sum, s) => sum + s.amount,
+                                  ),
+                                ),
                                 Icons.arrow_upward,
                                 Colors.red.shade600,
                               ),
                             if (paymentsToMe.isNotEmpty)
                               _buildSummaryItem(
                                 'You Receive',
-                                _formatCents(paymentsToMe.fold<int>(0, (sum, s) => sum + s.amount)),
+                                _formatCents(
+                                  paymentsToMe.fold<int>(
+                                    0,
+                                    (sum, s) => sum + s.amount,
+                                  ),
+                                ),
                                 Icons.arrow_downward,
                                 Colors.green.shade600,
                               ),
@@ -4325,7 +4979,7 @@ class _EnhancedSettlementBottomSheet extends StatelessWidget {
               ],
             ),
           ),
-          
+
           // Settlements list
           Flexible(
             child: ListView.builder(
@@ -4334,11 +4988,15 @@ class _EnhancedSettlementBottomSheet extends StatelessWidget {
               itemCount: settlements.length,
               itemBuilder: (context, index) {
                 final settlement = settlements[index];
-                return _buildEnhancedSettlementCard(context, settlement, currentUserId);
+                return _buildEnhancedSettlementCard(
+                  context,
+                  settlement,
+                  currentUserId,
+                );
               },
             ),
           ),
-          
+
           // Bottom actions for group creator
           if (isGroupCreator) ...[
             Padding(
@@ -4349,8 +5007,11 @@ class _EnhancedSettlementBottomSheet extends StatelessWidget {
                   const SizedBox(height: 12),
                   Row(
                     children: [
-                      Icon(Icons.admin_panel_settings, 
-                           color: Colors.amber.shade700, size: 20),
+                      Icon(
+                        Icons.admin_panel_settings,
+                        color: Colors.amber.shade700,
+                        size: 20,
+                      ),
                       const SizedBox(width: 8),
                       Text(
                         'Group Creator Options',
@@ -4382,7 +5043,7 @@ class _EnhancedSettlementBottomSheet extends StatelessWidget {
               ),
             ),
           ],
-          
+
           // Bottom padding
           const SizedBox(height: 24),
         ],
@@ -4390,7 +5051,12 @@ class _EnhancedSettlementBottomSheet extends StatelessWidget {
     );
   }
 
-  Widget _buildSummaryItem(String label, String value, IconData icon, Color color) {
+  Widget _buildSummaryItem(
+    String label,
+    String value,
+    IconData icon,
+    Color color,
+  ) {
     return Column(
       children: [
         Icon(icon, color: color, size: 20),
@@ -4405,38 +5071,39 @@ class _EnhancedSettlementBottomSheet extends StatelessWidget {
         ),
         Text(
           label,
-          style: TextStyle(
-            fontSize: 12,
-            color: Colors.grey.shade600,
-          ),
+          style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
         ),
       ],
     );
   }
 
-  Widget _buildEnhancedSettlementCard(BuildContext context, SettlementInfo settlement, String currentUserId) {
+  Widget _buildEnhancedSettlementCard(
+    BuildContext context,
+    SettlementInfo settlement,
+    String currentUserId,
+  ) {
     final debtorPhone = _getUserPhoneNumber(settlement.debtorId);
     final creditorPhone = _getUserPhoneNumber(settlement.creditorId);
     final canUseSwish = debtorPhone != null && creditorPhone != null;
     final isMyPayment = settlement.debtorId == currentUserId;
     final isPaymentToMe = settlement.creditorId == currentUserId;
-    
+
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: isMyPayment 
-            ? Colors.orange.shade50 
-            : isPaymentToMe 
-                ? Colors.green.shade50 
-                : Colors.grey.shade50,
+        color: isMyPayment
+            ? Colors.orange.shade50
+            : isPaymentToMe
+            ? Colors.green.shade50
+            : Colors.grey.shade50,
         borderRadius: BorderRadius.circular(12),
         border: Border.all(
-          color: isMyPayment 
-              ? Colors.orange.shade200 
-              : isPaymentToMe 
-                  ? Colors.green.shade200 
-                  : Colors.grey.shade200,
+          color: isMyPayment
+              ? Colors.orange.shade200
+              : isPaymentToMe
+              ? Colors.green.shade200
+              : Colors.grey.shade200,
         ),
       ),
       child: Column(
@@ -4461,11 +5128,11 @@ class _EnhancedSettlementBottomSheet extends StatelessWidget {
                       style: TextStyle(
                         fontSize: 18,
                         fontWeight: FontWeight.bold,
-                        color: isMyPayment 
-                            ? Colors.orange.shade800 
-                            : isPaymentToMe 
-                                ? Colors.green.shade800 
-                                : const Color(0xFF1B4F72),
+                        color: isMyPayment
+                            ? Colors.orange.shade800
+                            : isPaymentToMe
+                            ? Colors.green.shade800
+                            : const Color(0xFF1B4F72),
                       ),
                     ),
                   ],
@@ -4473,7 +5140,10 @@ class _EnhancedSettlementBottomSheet extends StatelessWidget {
               ),
               if (isMyPayment)
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 4,
+                  ),
                   decoration: BoxDecoration(
                     color: Colors.orange.shade200,
                     borderRadius: BorderRadius.circular(12),
@@ -4489,7 +5159,10 @@ class _EnhancedSettlementBottomSheet extends StatelessWidget {
                 )
               else if (isPaymentToMe)
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 4,
+                  ),
                   decoration: BoxDecoration(
                     color: Colors.green.shade200,
                     borderRadius: BorderRadius.circular(12),
@@ -4506,7 +5179,7 @@ class _EnhancedSettlementBottomSheet extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 12),
-          
+
           // Action buttons - show different options based on relationship to payment
           if (isMyPayment) ...[
             // User needs to pay
@@ -4572,7 +5245,7 @@ class _EnhancedSettlementBottomSheet extends StatelessWidget {
               ),
             ),
           ],
-          
+
           // Universal mark as paid option (visible to payer or receiver)
           if (isMyPayment || isPaymentToMe) ...[
             const SizedBox(height: 8),
@@ -4586,9 +5259,13 @@ class _EnhancedSettlementBottomSheet extends StatelessWidget {
                 icon: const Icon(Icons.check, size: 18),
                 label: Text(isMyPayment ? 'Mark as Sent' : 'Confirm Received'),
                 style: OutlinedButton.styleFrom(
-                  foregroundColor: isMyPayment ? Colors.orange.shade700 : Colors.green.shade700,
+                  foregroundColor: isMyPayment
+                      ? Colors.orange.shade700
+                      : Colors.green.shade700,
                   side: BorderSide(
-                    color: isMyPayment ? Colors.orange.shade300 : Colors.green.shade300,
+                    color: isMyPayment
+                        ? Colors.orange.shade300
+                        : Colors.green.shade300,
                   ),
                   padding: const EdgeInsets.symmetric(vertical: 10),
                   shape: RoundedRectangleBorder(
@@ -4598,7 +5275,7 @@ class _EnhancedSettlementBottomSheet extends StatelessWidget {
               ),
             ),
           ],
-          
+
           if (!canUseSwish && isMyPayment)
             Padding(
               padding: const EdgeInsets.only(top: 8),
@@ -4634,21 +5311,27 @@ class _EnhancedSettlementBottomSheet extends StatelessWidget {
     );
   }
 
-  void _showMarkAsSettledDialog(BuildContext context, SettlementInfo settlement) {
-    final currentUserId = fb.FirebaseAuth.instance.currentUser?.uid ?? 'dev_user_123';
+  void _showMarkAsSettledDialog(
+    BuildContext context,
+    SettlementInfo settlement,
+  ) {
+    final currentUserId =
+        fb.FirebaseAuth.instance.currentUser?.uid ?? 'dev_user_123';
     final isMyPayment = settlement.debtorId == currentUserId;
-    
+
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: Text(isMyPayment ? 'Confirm Payment Sent' : 'Confirm Payment Received'),
+        title: Text(
+          isMyPayment ? 'Confirm Payment Sent' : 'Confirm Payment Received',
+        ),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              isMyPayment 
-                  ? 'Have you sent the payment?' 
+              isMyPayment
+                  ? 'Have you sent the payment?'
                   : 'Have you received the payment?',
               style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
             ),
@@ -4674,7 +5357,7 @@ class _EnhancedSettlementBottomSheet extends StatelessWidget {
               ScaffoldMessenger.of(context).showSnackBar(
                 SnackBar(
                   content: Text(
-                    isMyPayment 
+                    isMyPayment
                         ? 'Payment marked as sent to ${_getUserDisplayName(settlement.creditorId)}'
                         : 'Payment confirmed as received from ${_getUserDisplayName(settlement.debtorId)}',
                   ),
@@ -4710,12 +5393,16 @@ class _EnhancedSettlementBottomSheet extends StatelessWidget {
     return null;
   }
 
-  Future<void> _handleSwishPaymentFromCard(BuildContext context, SettlementInfo settlement) async {
+  Future<void> _handleSwishPaymentFromCard(
+    BuildContext context,
+    SettlementInfo settlement,
+  ) async {
     final targetPhone = _getUserPhoneNumber(settlement.creditorId);
     if (targetPhone == null) return;
-    
-    final message = 'Expense settlement - ${_getUserDisplayName(settlement.debtorId)} to ${_getUserDisplayName(settlement.creditorId)}';
-    
+
+    final message =
+        'Expense settlement - ${_getUserDisplayName(settlement.debtorId)} to ${_getUserDisplayName(settlement.creditorId)}';
+
     // Track this payment for return detection
     final pendingPayment = PendingSwishPayment(
       id: '${settlement.debtorId}_${settlement.creditorId}_${DateTime.now().millisecondsSinceEpoch}',
@@ -4725,9 +5412,9 @@ class _EnhancedSettlementBottomSheet extends StatelessWidget {
       groupId: group.id,
       timestamp: DateTime.now(),
     );
-    
+
     SwishReturnDetector().trackSwishLaunch(pendingPayment);
-    
+
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -4735,7 +5422,9 @@ class _EnhancedSettlementBottomSheet extends StatelessWidget {
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text('Opening Swish to send ${_formatCents(settlement.amount)} to $targetPhone'),
+            Text(
+              'Opening Swish to send ${_formatCents(settlement.amount)} to $targetPhone',
+            ),
             const SizedBox(height: 16),
             Text('Message: $message'),
             const SizedBox(height: 16),
@@ -4774,7 +5463,9 @@ class _EnhancedSettlementBottomSheet extends StatelessWidget {
             onPressed: () {
               Navigator.of(ctx).pop();
               // In a real app, this would launch Swish
-              _launchSwishPayment('swish://payment?phone=$targetPhone&amount=${settlement.amount / 100}&message=${Uri.encodeComponent(message)}');
+              _launchSwishPayment(
+                'swish://payment?phone=$targetPhone&amount=${settlement.amount / 100}&message=${Uri.encodeComponent(message)}',
+              );
             },
             child: const Text('Open Swish'),
           ),
@@ -4818,16 +5509,18 @@ class _MembersDialogState extends ConsumerState<_MembersDialog> {
         child: VStack([
           'Current members:'.text.semiBold.make(),
           8.heightBox,
-          ...widget.group.memberUserIds.map((uid) => ListTile(
-            title: Text(_abbr(uid)),
-            subtitle: Text('Member'),
-            trailing: widget.group.memberUserIds.length > 1
-              ? IconButton(
-                  onPressed: () => _removeMember(uid),
-                  icon: const Icon(Icons.remove_circle_outline),
-                )
-              : null,
-          )),
+          ...widget.group.memberUserIds.map(
+            (uid) => ListTile(
+              title: Text(_abbr(uid)),
+              subtitle: Text('Member'),
+              trailing: widget.group.memberUserIds.length > 1
+                  ? IconButton(
+                      onPressed: () => _removeMember(uid),
+                      icon: const Icon(Icons.remove_circle_outline),
+                    )
+                  : null,
+            ),
+          ),
           16.heightBox,
           ElevatedButton.icon(
             onPressed: () => _showAddMemberDialog(),
@@ -4862,7 +5555,10 @@ class _MembersDialogState extends ConsumerState<_MembersDialog> {
           ),
         ]),
         actions: [
-          TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('Cancel')),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Cancel'),
+          ),
           ElevatedButton(
             onPressed: () async {
               final user = fb.FirebaseAuth.instance.currentUser;
@@ -4894,15 +5590,14 @@ class _MembersDialogState extends ConsumerState<_MembersDialog> {
   Future<void> _removeMember(String userId) async {
     final currentMembers = List<String>.from(widget.group.memberUserIds);
     currentMembers.remove(userId);
-    await ref.read(firestoreRepositoryProvider).updateGroup(
-      groupId: widget.group.id,
-      memberUserIds: currentMembers,
-    );
+    await ref
+        .read(firestoreRepositoryProvider)
+        .updateGroup(groupId: widget.group.id, memberUserIds: currentMembers);
     if (mounted) {
       Navigator.of(context).pop();
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Member removed')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Member removed')));
     }
   }
 
@@ -4932,7 +5627,8 @@ class _AddExpenseDialogState extends ConsumerState<_AddExpenseDialog> {
   void initState() {
     super.initState();
     // Initialize with current user ID if available, otherwise use a default
-    final currentUserId = fb.FirebaseAuth.instance.currentUser?.uid ?? 'developer_user';
+    final currentUserId =
+        fb.FirebaseAuth.instance.currentUser?.uid ?? 'developer_user';
     _selectedUsers = [currentUserId];
   }
 
@@ -4940,14 +5636,17 @@ class _AddExpenseDialogState extends ConsumerState<_AddExpenseDialog> {
   Widget build(BuildContext context) {
     final devMode = ref.watch(developerModeProvider);
     final user = fb.FirebaseAuth.instance.currentUser;
-    
+
     // In developer mode, always show the dialog regardless of Firebase auth state
     if (!devMode && user == null) return const SizedBox.shrink();
-    
+
     return AlertDialog(
       title: Row(
         children: [
-          Icon(Icons.receipt_long, color: Theme.of(context).colorScheme.primary),
+          Icon(
+            Icons.receipt_long,
+            color: Theme.of(context).colorScheme.primary,
+          ),
           const SizedBox(width: 8),
           const Text('Add New Expense'),
         ],
@@ -4974,7 +5673,7 @@ class _AddExpenseDialogState extends ConsumerState<_AddExpenseDialog> {
               ),
             ),
             16.heightBox,
-            
+
             // Amount field
             Container(
               decoration: BoxDecoration(
@@ -4995,7 +5694,7 @@ class _AddExpenseDialogState extends ConsumerState<_AddExpenseDialog> {
               ),
             ),
             24.heightBox,
-            
+
             // Split mode section
             Container(
               padding: const EdgeInsets.all(16),
@@ -5009,7 +5708,11 @@ class _AddExpenseDialogState extends ConsumerState<_AddExpenseDialog> {
                 children: [
                   Row(
                     children: [
-                      Icon(Icons.group, size: 20, color: Theme.of(context).colorScheme.primary),
+                      Icon(
+                        Icons.group,
+                        size: 20,
+                        color: Theme.of(context).colorScheme.primary,
+                      ),
                       const SizedBox(width: 8),
                       Text(
                         'How to split this expense?',
@@ -5024,7 +5727,9 @@ class _AddExpenseDialogState extends ConsumerState<_AddExpenseDialog> {
                   const SizedBox(height: 12),
                   RadioListTile<SplitMode>(
                     title: const Text('Split Equally'),
-                    subtitle: const Text('Divide amount equally among all participants'),
+                    subtitle: const Text(
+                      'Divide amount equally among all participants',
+                    ),
                     value: SplitMode.equal,
                     groupValue: _splitMode,
                     onChanged: (v) => setState(() => _splitMode = v!),
@@ -5032,7 +5737,9 @@ class _AddExpenseDialogState extends ConsumerState<_AddExpenseDialog> {
                   ),
                   RadioListTile<SplitMode>(
                     title: const Text('Custom Amounts'),
-                    subtitle: const Text('Set specific amounts for each person'),
+                    subtitle: const Text(
+                      'Set specific amounts for each person',
+                    ),
                     value: SplitMode.custom,
                     groupValue: _splitMode,
                     onChanged: (v) => setState(() => _splitMode = v!),
@@ -5040,7 +5747,9 @@ class _AddExpenseDialogState extends ConsumerState<_AddExpenseDialog> {
                   ),
                   RadioListTile<SplitMode>(
                     title: const Text('Percentages'),
-                    subtitle: const Text('Split by percentage (must total 100%)'),
+                    subtitle: const Text(
+                      'Split by percentage (must total 100%)',
+                    ),
                     value: SplitMode.percent,
                     groupValue: _splitMode,
                     onChanged: (v) => setState(() => _splitMode = v!),
@@ -5070,11 +5779,11 @@ class _AddExpenseDialogState extends ConsumerState<_AddExpenseDialog> {
       ],
     );
   }
-  
+
   bool _canAddExpense() {
-    return _descCtrl.text.trim().isNotEmpty && 
-           _amountCtrl.text.trim().isNotEmpty &&
-           _selectedUsers.isNotEmpty;
+    return _descCtrl.text.trim().isNotEmpty &&
+        _amountCtrl.text.trim().isNotEmpty &&
+        _selectedUsers.isNotEmpty;
   }
 
   Widget _buildSplitDetails() {
@@ -5100,7 +5809,7 @@ class _AddExpenseDialogState extends ConsumerState<_AddExpenseDialog> {
         ),
       );
     }
-    
+
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -5111,7 +5820,11 @@ class _AddExpenseDialogState extends ConsumerState<_AddExpenseDialog> {
       child: VStack([
         Row(
           children: [
-            Icon(Icons.people, size: 20, color: Theme.of(context).colorScheme.primary),
+            Icon(
+              Icons.people,
+              size: 20,
+              color: Theme.of(context).colorScheme.primary,
+            ),
             const SizedBox(width: 8),
             Text(
               'Select participants:',
@@ -5131,7 +5844,11 @@ class _AddExpenseDialogState extends ConsumerState<_AddExpenseDialog> {
           8.heightBox,
           Row(
             children: [
-              Icon(Icons.attach_money, size: 20, color: Theme.of(context).colorScheme.primary),
+              Icon(
+                Icons.attach_money,
+                size: 20,
+                color: Theme.of(context).colorScheme.primary,
+              ),
               const SizedBox(width: 8),
               Text(
                 'Set custom amounts:',
@@ -5152,7 +5869,11 @@ class _AddExpenseDialogState extends ConsumerState<_AddExpenseDialog> {
           8.heightBox,
           Row(
             children: [
-              Icon(Icons.percent, size: 20, color: Theme.of(context).colorScheme.primary),
+              Icon(
+                Icons.percent,
+                size: 20,
+                color: Theme.of(context).colorScheme.primary,
+              ),
               const SizedBox(width: 8),
               Text(
                 'Set percentages (must total 100%):',
@@ -5173,16 +5894,17 @@ class _AddExpenseDialogState extends ConsumerState<_AddExpenseDialog> {
 
   Widget _buildUserSelection() {
     final devMode = ref.watch(developerModeProvider);
-    
+
     if (devMode) {
       // In developer mode, use developer groups
       final groups = ref.watch(developerGroupsProvider);
       final currentGroup = groups.firstWhere(
-        (g) => g.id == widget.groupId, 
-        orElse: () => const Group(id: '', name: '', memberUserIds: [], createdAtMs: 0)
+        (g) => g.id == widget.groupId,
+        orElse: () =>
+            const Group(id: '', name: '', memberUserIds: [], createdAtMs: 0),
       );
       final members = currentGroup.memberUserIds;
-      
+
       return Container(
         decoration: BoxDecoration(
           color: Theme.of(context).colorScheme.surface,
@@ -5192,7 +5914,7 @@ class _AddExpenseDialogState extends ConsumerState<_AddExpenseDialog> {
         child: Column(
           children: members.map((uid) {
             final isSelected = _selectedUsers.contains(uid);
-            
+
             return InkWell(
               onTap: () {
                 setState(() {
@@ -5204,9 +5926,14 @@ class _AddExpenseDialogState extends ConsumerState<_AddExpenseDialog> {
                 });
               },
               child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 12,
+                ),
                 decoration: BoxDecoration(
-                  color: isSelected ? Theme.of(context).colorScheme.primary.withOpacity(0.1) : null,
+                  color: isSelected
+                      ? Theme.of(context).colorScheme.primary.withOpacity(0.1)
+                      : null,
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: Row(
@@ -5227,11 +5954,15 @@ class _AddExpenseDialogState extends ConsumerState<_AddExpenseDialog> {
                     const SizedBox(width: 12),
                     CircleAvatar(
                       radius: 16,
-                      backgroundColor: Theme.of(context).colorScheme.primaryContainer,
+                      backgroundColor: Theme.of(
+                        context,
+                      ).colorScheme.primaryContainer,
                       child: Text(
                         _abbr(uid)[0].toUpperCase(),
                         style: TextStyle(
-                          color: Theme.of(context).colorScheme.onPrimaryContainer,
+                          color: Theme.of(
+                            context,
+                          ).colorScheme.onPrimaryContainer,
                           fontWeight: FontWeight.bold,
                           fontSize: 14,
                         ),
@@ -5243,10 +5974,12 @@ class _AddExpenseDialogState extends ConsumerState<_AddExpenseDialog> {
                         _abbr(uid),
                         style: TextStyle(
                           fontSize: 16,
-                          fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
-                          color: isSelected 
-                            ? Theme.of(context).colorScheme.primary 
-                            : Theme.of(context).colorScheme.onSurface,
+                          fontWeight: isSelected
+                              ? FontWeight.w600
+                              : FontWeight.normal,
+                          color: isSelected
+                              ? Theme.of(context).colorScheme.primary
+                              : Theme.of(context).colorScheme.onSurface,
                         ),
                       ),
                     ),
@@ -5271,13 +6004,23 @@ class _AddExpenseDialogState extends ConsumerState<_AddExpenseDialog> {
           if (currentUser == null) {
             return Stream.value(<Group>[]);
           }
-          return ref.watch(firestoreRepositoryProvider).watchGroups(currentUser.uid);
+          return ref
+              .watch(firestoreRepositoryProvider)
+              .watchGroups(currentUser.uid);
         })(),
         builder: (context, snap) {
           final groups = snap.data ?? [];
-          final currentGroup = groups.firstWhere((g) => g.id == widget.groupId, orElse: () => const Group(id: '', name: '', memberUserIds: [], createdAtMs: 0));
+          final currentGroup = groups.firstWhere(
+            (g) => g.id == widget.groupId,
+            orElse: () => const Group(
+              id: '',
+              name: '',
+              memberUserIds: [],
+              createdAtMs: 0,
+            ),
+          );
           final members = currentGroup.memberUserIds;
-          
+
           return Container(
             decoration: BoxDecoration(
               color: Theme.of(context).colorScheme.surface,
@@ -5287,7 +6030,7 @@ class _AddExpenseDialogState extends ConsumerState<_AddExpenseDialog> {
             child: Column(
               children: members.map((uid) {
                 final isSelected = _selectedUsers.contains(uid);
-                
+
                 return InkWell(
                   onTap: () {
                     setState(() {
@@ -5299,9 +6042,16 @@ class _AddExpenseDialogState extends ConsumerState<_AddExpenseDialog> {
                     });
                   },
                   child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 12,
+                    ),
                     decoration: BoxDecoration(
-                      color: isSelected ? Theme.of(context).colorScheme.primary.withOpacity(0.1) : null,
+                      color: isSelected
+                          ? Theme.of(
+                              context,
+                            ).colorScheme.primary.withOpacity(0.1)
+                          : null,
                       borderRadius: BorderRadius.circular(8),
                     ),
                     child: Row(
@@ -5322,11 +6072,15 @@ class _AddExpenseDialogState extends ConsumerState<_AddExpenseDialog> {
                         const SizedBox(width: 12),
                         CircleAvatar(
                           radius: 16,
-                          backgroundColor: Theme.of(context).colorScheme.primaryContainer,
+                          backgroundColor: Theme.of(
+                            context,
+                          ).colorScheme.primaryContainer,
                           child: Text(
                             _abbr(uid)[0].toUpperCase(),
                             style: TextStyle(
-                              color: Theme.of(context).colorScheme.onPrimaryContainer,
+                              color: Theme.of(
+                                context,
+                              ).colorScheme.onPrimaryContainer,
                               fontWeight: FontWeight.bold,
                               fontSize: 14,
                             ),
@@ -5338,10 +6092,12 @@ class _AddExpenseDialogState extends ConsumerState<_AddExpenseDialog> {
                             _abbr(uid),
                             style: TextStyle(
                               fontSize: 16,
-                              fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
-                              color: isSelected 
-                                ? Theme.of(context).colorScheme.primary 
-                                : Theme.of(context).colorScheme.onSurface,
+                              fontWeight: isSelected
+                                  ? FontWeight.w600
+                                  : FontWeight.normal,
+                              color: isSelected
+                                  ? Theme.of(context).colorScheme.primary
+                                  : Theme.of(context).colorScheme.onSurface,
                             ),
                           ),
                         ),
@@ -5373,9 +6129,7 @@ class _AddExpenseDialogState extends ConsumerState<_AddExpenseDialog> {
         decoration: InputDecoration(
           labelText: '${_abbr(uid)} amount',
           prefixIcon: const Icon(Icons.attach_money),
-          border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(8),
-          ),
+          border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
           filled: true,
           fillColor: Theme.of(context).colorScheme.surface,
         ),
@@ -5402,9 +6156,7 @@ class _AddExpenseDialogState extends ConsumerState<_AddExpenseDialog> {
         decoration: InputDecoration(
           labelText: '${_abbr(uid)} percentage',
           prefixIcon: const Icon(Icons.percent),
-          border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(8),
-          ),
+          border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
           filled: true,
           fillColor: Theme.of(context).colorScheme.surface,
           suffixText: '%',
@@ -5429,19 +6181,20 @@ class _AddExpenseDialogState extends ConsumerState<_AddExpenseDialog> {
   Future<void> _addExpense() async {
     final devMode = ref.read(developerModeProvider);
     final user = fb.FirebaseAuth.instance.currentUser;
-    
+
     // In real mode, we need a Firebase user. In dev mode, we can use a default
     if (!devMode && user == null) return;
-    
+
     final double parsed = double.tryParse(_amountCtrl.text.trim()) ?? 0;
     final int cents = (parsed * 100).round();
-    
+
     Map<String, int> customAmounts = {};
     Map<String, double> percentages = {};
-    
+
     if (_splitMode == SplitMode.custom) {
       for (final uid in _selectedUsers) {
-        final amount = double.tryParse(_customAmountCtrls[uid]?.text ?? '0') ?? 0;
+        final amount =
+            double.tryParse(_customAmountCtrls[uid]?.text ?? '0') ?? 0;
         customAmounts[uid] = (amount * 100).round();
       }
     } else if (_splitMode == SplitMode.percent) {
@@ -5450,10 +6203,12 @@ class _AddExpenseDialogState extends ConsumerState<_AddExpenseDialog> {
         percentages[uid] = percent / 100.0;
       }
     }
-    
+
     // Use Firebase user ID in real mode, or a default in developer mode
-    final paidByUserId = devMode ? 'developer_user' : (user?.uid ?? 'developer_user');
-    
+    final paidByUserId = devMode
+        ? 'developer_user'
+        : (user?.uid ?? 'developer_user');
+
     final expense = Expense(
       id: 'new',
       groupId: widget.groupId,
@@ -5466,7 +6221,7 @@ class _AddExpenseDialogState extends ConsumerState<_AddExpenseDialog> {
       customAmounts: customAmounts,
       percentages: percentages,
     );
-    
+
     if (devMode) {
       // Add to developer data
       addDeveloperExpense(widget.groupId, expense);
@@ -5486,9 +6241,9 @@ class _AddExpenseDialogState extends ConsumerState<_AddExpenseDialog> {
         );
       } catch (e) {
         Navigator.of(context).pop();
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error adding expense: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Error adding expense: $e')));
       }
     }
   }
@@ -5525,10 +6280,10 @@ class _GroupExpensesList extends ConsumerWidget {
       data: (items) {
         if (items.isEmpty) {
           return VStack([
-          'No expenses yet'.text.semiBold.make(),
-          8.heightBox,
-          'Tap the + button to add an expense.'.text.gray600.make(),
-        ]).centered();
+            'No expenses yet'.text.semiBold.make(),
+            8.heightBox,
+            'Tap the + button to add an expense.'.text.gray600.make(),
+          ]).centered();
         }
         return ListView.separated(
           shrinkWrap: true,
@@ -5545,9 +6300,17 @@ class _GroupExpensesList extends ConsumerWidget {
   }
 }
 
-void _showEditExpenseDialog(BuildContext context, WidgetRef ref, Expense expense) {
-  final TextEditingController descCtrl = TextEditingController(text: expense.description);
-  final TextEditingController amountCtrl = TextEditingController(text: (expense.amountCents / 100.0).toStringAsFixed(2));
+void _showEditExpenseDialog(
+  BuildContext context,
+  WidgetRef ref,
+  Expense expense,
+) {
+  final TextEditingController descCtrl = TextEditingController(
+    text: expense.description,
+  );
+  final TextEditingController amountCtrl = TextEditingController(
+    text: (expense.amountCents / 100.0).toStringAsFixed(2),
+  );
   showDialog(
     context: context,
     builder: (ctx) => AlertDialog(
@@ -5555,10 +6318,17 @@ void _showEditExpenseDialog(BuildContext context, WidgetRef ref, Expense expense
       content: VStack([
         VxTextField(labelText: 'Description', controller: descCtrl),
         8.heightBox,
-        VxTextField(labelText: 'Amount (e.g. 12.34)', controller: amountCtrl, keyboardType: TextInputType.number),
+        VxTextField(
+          labelText: 'Amount (e.g. 12.34)',
+          controller: amountCtrl,
+          keyboardType: TextInputType.number,
+        ),
       ]),
       actions: [
-        TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('Cancel')),
+        TextButton(
+          onPressed: () => Navigator.of(ctx).pop(),
+          child: const Text('Cancel'),
+        ),
         ElevatedButton(
           onPressed: () async {
             final double parsed = double.tryParse(amountCtrl.text.trim()) ?? 0;
@@ -5600,10 +6370,7 @@ class _ExpenseCardState extends ConsumerState<_ExpenseCard> {
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(24),
-        border: Border.all(
-          color: const Color(0xFFE2E8F0),
-          width: 1,
-        ),
+        border: Border.all(color: const Color(0xFFE2E8F0), width: 1),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withOpacity(0.04),
@@ -5620,7 +6387,10 @@ class _ExpenseCardState extends ConsumerState<_ExpenseCard> {
       child: Column(
         children: [
           ListTile(
-            contentPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+            contentPadding: const EdgeInsets.symmetric(
+              horizontal: 24,
+              vertical: 16,
+            ),
             title: Text(
               e.description,
               style: const TextStyle(
@@ -5642,7 +6412,10 @@ class _ExpenseCardState extends ConsumerState<_ExpenseCard> {
             ),
             trailing: HStack([
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 8,
+                ),
                 decoration: BoxDecoration(
                   gradient: const LinearGradient(
                     colors: [Color(0xFF2D3748), Color(0xFF4A5568)],
@@ -5672,16 +6445,26 @@ class _ExpenseCardState extends ConsumerState<_ExpenseCard> {
                   if (value == 'edit') {
                     _showEditExpenseDialog(context, ref, e);
                   } else if (value == 'delete') {
-                    await repo.removeExpense(groupId: widget.groupId, expenseId: e.id);
+                    await repo.removeExpense(
+                      groupId: widget.groupId,
+                      expenseId: e.id,
+                    );
                   }
                 },
                 itemBuilder: (context) => [
-                  const PopupMenuItem<String>(value: 'edit', child: Text('Edit')),
-                  const PopupMenuItem<String>(value: 'delete', child: Text('Delete')),
+                  const PopupMenuItem<String>(
+                    value: 'edit',
+                    child: Text('Edit'),
+                  ),
+                  const PopupMenuItem<String>(
+                    value: 'delete',
+                    child: Text('Delete'),
+                  ),
                 ],
               ),
             ]),
-            onTap: () => context.go('/groups/${widget.groupId}/expense/${e.id}'),
+            onTap: () =>
+                context.go('/groups/${widget.groupId}/expense/${e.id}'),
           ),
         ],
       ),
@@ -5720,7 +6503,9 @@ class _GroupBalances extends ConsumerWidget {
         final myBalance = user == null ? 0 : (balances[user.uid] ?? 0);
         final suggestions = _suggestSettlements(balances);
         return VStack([
-          Text('Total: ${_formatCents(total)}  |  You: ${_formatSigned(myBalance)}'),
+          Text(
+            'Total: ${_formatCents(total)}  |  You: ${_formatSigned(myBalance)}',
+          ),
           8.heightBox,
           if (suggestions.isNotEmpty)
             Column(
@@ -5735,15 +6520,18 @@ class _GroupBalances extends ConsumerWidget {
     );
   }
 
-  ({int totalCents, Map<String, int> perUser}) _computeBalances(List<Expense> items) {
+  ({int totalCents, Map<String, int> perUser}) _computeBalances(
+    List<Expense> items,
+  ) {
     int total = 0;
     final Map<String, int> balances = <String, int>{};
     for (final e in items) {
       total += e.amountCents;
-      
+
       // credit payer
-      balances[e.paidByUserId] = (balances[e.paidByUserId] ?? 0) + e.amountCents;
-      
+      balances[e.paidByUserId] =
+          (balances[e.paidByUserId] ?? 0) + e.amountCents;
+
       // debit split users based on split mode
       if (e.splitMode == SplitMode.equal) {
         final int perHead = (e.amountCents / e.splitUserIds.length).floor();
@@ -5793,7 +6581,9 @@ class _GroupBalances extends ConsumerWidget {
       final d = debtList[i];
       final c = credList[j];
       final int pay = d.value < c.value ? d.value : c.value;
-      suggestions.add('${_abbr(d.key)} pays ${_abbr(c.key)} ${_formatCents(pay)}');
+      suggestions.add(
+        '${_abbr(d.key)} pays ${_abbr(c.key)} ${_formatCents(pay)}',
+      );
       debtList[i] = MapEntry(d.key, d.value - pay);
       credList[j] = MapEntry(c.key, c.value - pay);
       if (debtList[i].value == 0) i++;
@@ -5833,9 +6623,9 @@ class _JoinGroupScreenState extends ConsumerState<JoinGroupScreen> {
       if (groupId != null && mounted) {
         context.go('/groups/$groupId/analysis');
       } else if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Invalid share code')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('Invalid share code')));
       }
     } finally {
       if (mounted) setState(() => _isJoining = false);
@@ -5858,9 +6648,9 @@ class _JoinGroupScreenState extends ConsumerState<JoinGroupScreen> {
         16.heightBox,
         ElevatedButton(
           onPressed: _isJoining ? null : _joinGroup,
-          child: _isJoining 
-            ? const CircularProgressIndicator() 
-            : const Text('Join Group'),
+          child: _isJoining
+              ? const CircularProgressIndicator()
+              : const Text('Join Group'),
         ),
       ]).p16(),
     );
@@ -5868,12 +6658,16 @@ class _JoinGroupScreenState extends ConsumerState<JoinGroupScreen> {
 }
 
 // Settings providers for language and currency
-final languageProvider = NotifierProvider<LanguageNotifier, String>(LanguageNotifier.new);
-final currencyProvider = NotifierProvider<CurrencyNotifier, String>(CurrencyNotifier.new);
+final languageProvider = NotifierProvider<LanguageNotifier, String>(
+  LanguageNotifier.new,
+);
+final currencyProvider = NotifierProvider<CurrencyNotifier, String>(
+  CurrencyNotifier.new,
+);
 
 class LanguageNotifier extends Notifier<String> {
   static const String _languageKey = 'app_language';
-  
+
   @override
   String build() {
     _loadLanguage();
@@ -5884,13 +6678,13 @@ class LanguageNotifier extends Notifier<String> {
     state = language;
     _saveLanguage(language);
   }
-  
+
   Future<void> _loadLanguage() async {
     final prefs = await SharedPreferences.getInstance();
     final savedLanguage = prefs.getString(_languageKey) ?? 'en';
     state = savedLanguage;
   }
-  
+
   Future<void> _saveLanguage(String language) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_languageKey, language);
@@ -5899,7 +6693,7 @@ class LanguageNotifier extends Notifier<String> {
 
 class CurrencyNotifier extends Notifier<String> {
   static const String _currencyKey = 'app_currency';
-  
+
   @override
   String build() {
     _loadCurrency();
@@ -5910,13 +6704,13 @@ class CurrencyNotifier extends Notifier<String> {
     state = currency;
     _saveCurrency(currency);
   }
-  
+
   Future<void> _loadCurrency() async {
     final prefs = await SharedPreferences.getInstance();
     final savedCurrency = prefs.getString(_currencyKey) ?? 'USD';
     state = savedCurrency;
   }
-  
+
   Future<void> _saveCurrency(String currency) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_currencyKey, currency);
@@ -5926,22 +6720,22 @@ class CurrencyNotifier extends Notifier<String> {
 class SettingsNotifier {
   static const String _languageKey = 'app_language';
   static const String _currencyKey = 'app_currency';
-  
+
   static Future<String> loadLanguage() async {
     final prefs = await SharedPreferences.getInstance();
     return prefs.getString(_languageKey) ?? 'en';
   }
-  
+
   static Future<void> saveLanguage(String language) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_languageKey, language);
   }
-  
+
   static Future<String> loadCurrency() async {
     final prefs = await SharedPreferences.getInstance();
     return prefs.getString(_currencyKey) ?? 'USD';
   }
-  
+
   static Future<void> saveCurrency(String currency) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_currencyKey, currency);
@@ -5959,7 +6753,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   static const Map<String, String> languages = {
     'en': 'English',
     'es': 'Español',
-    'fr': 'Français', 
+    'fr': 'Français',
     'de': 'Deutsch',
     'it': 'Italiano',
     'pt': 'Português',
@@ -5996,12 +6790,12 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     setState(() {
       _loadingExchangeRate = true;
     });
-    
+
     try {
       final currentCurrency = ref.read(currencyProvider);
       if (currentCurrency != CurrencyFormatter.baseCurrency) {
         final rateInfo = await CurrencyFormatter.getExchangeRateInfo(
-          CurrencyFormatter.baseCurrency, 
+          CurrencyFormatter.baseCurrency,
           currentCurrency,
         );
         setState(() {
@@ -6025,7 +6819,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   Future<void> _loadSettings() async {
     final language = await SettingsNotifier.loadLanguage();
     final currency = await SettingsNotifier.loadCurrency();
-    
+
     if (mounted) {
       ref.read(languageProvider.notifier).setLanguage(language);
       ref.read(currencyProvider.notifier).setCurrency(currency);
@@ -6037,7 +6831,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     final currentLanguage = ref.watch(languageProvider);
     final currentCurrency = ref.watch(currencyProvider);
     final themeMode = ref.watch(themeNotifierProvider);
-    
+
     return Scaffold(
       appBar: AppBar(
         title: Text(AppLocalizations.translate('settings', currentLanguage)),
@@ -6060,14 +6854,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
             colors: Theme.of(context).brightness == Brightness.dark
-                ? [
-                    const Color(0xFF1A202C),
-                    const Color(0xFF2D3748),
-                  ]
-                : [
-                    const Color(0xFFF7FAFC),
-                    const Color(0xFFEDF2F7),
-                  ],
+                ? [const Color(0xFF1A202C), const Color(0xFF2D3748)]
+                : [const Color(0xFFF7FAFC), const Color(0xFFEDF2F7)],
           ),
         ),
         child: ListView(
@@ -6081,8 +6869,14 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 _buildSettingsTile(
                   context,
                   icon: Icons.person,
-                  title: AppLocalizations.translate('edit_profile', currentLanguage),
-                  subtitle: AppLocalizations.translate('manage_your_profile', currentLanguage),
+                  title: AppLocalizations.translate(
+                    'edit_profile',
+                    currentLanguage,
+                  ),
+                  subtitle: AppLocalizations.translate(
+                    'manage_your_profile',
+                    currentLanguage,
+                  ),
                   onTap: () => context.go('/profile'),
                 ),
                 _buildSettingsTile(
@@ -6094,9 +6888,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 ),
               ],
             ),
-            
+
             const SizedBox(height: 24),
-            
+
             // Theme Section
             _buildSettingsSection(
               context,
@@ -6104,21 +6898,28 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               [
                 _buildSettingsTile(
                   context,
-                  icon: themeMode == ThemeMode.dark ? Icons.dark_mode : Icons.light_mode,
+                  icon: themeMode == ThemeMode.dark
+                      ? Icons.dark_mode
+                      : Icons.light_mode,
                   title: AppLocalizations.translate('theme', currentLanguage),
-                  subtitle: AppLocalizations.translate(themeMode == ThemeMode.dark ? 'dark' : 'light', currentLanguage),
+                  subtitle: AppLocalizations.translate(
+                    themeMode == ThemeMode.dark ? 'dark' : 'light',
+                    currentLanguage,
+                  ),
                   onTap: () {
-                    final newMode = themeMode == ThemeMode.dark 
-                        ? ThemeMode.light 
+                    final newMode = themeMode == ThemeMode.dark
+                        ? ThemeMode.light
                         : ThemeMode.dark;
-                    ref.read(themeNotifierProvider.notifier).setThemeMode(newMode);
+                    ref
+                        .read(themeNotifierProvider.notifier)
+                        .setThemeMode(newMode);
                   },
                 ),
               ],
             ),
-            
+
             const SizedBox(height: 24),
-            
+
             // Localization Section
             _buildSettingsSection(
               context,
@@ -6127,14 +6928,20 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 _buildSettingsTile(
                   context,
                   icon: Icons.language,
-                  title: AppLocalizations.translate('language', currentLanguage),
+                  title: AppLocalizations.translate(
+                    'language',
+                    currentLanguage,
+                  ),
                   subtitle: languages[currentLanguage] ?? 'English',
                   onTap: () => _showLanguageDialog(context, currentLanguage),
                 ),
                 _buildSettingsTile(
                   context,
                   icon: Icons.attach_money,
-                  title: AppLocalizations.translate('currency', currentLanguage),
+                  title: AppLocalizations.translate(
+                    'currency',
+                    currentLanguage,
+                  ),
                   subtitle: currencies[currentCurrency] ?? 'US Dollar (\$)',
                   onTap: () => _showCurrencyDialog(context, currentCurrency),
                 ),
@@ -6142,7 +6949,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                   Padding(
                     padding: const EdgeInsets.only(left: 56, top: 4),
                     child: Text(
-                      _loadingExchangeRate ? 'Loading exchange rate...' : _exchangeRateInfo,
+                      _loadingExchangeRate
+                          ? 'Loading exchange rate...'
+                          : _exchangeRateInfo,
                       style: TextStyle(
                         fontSize: 12,
                         color: Colors.grey.shade600,
@@ -6152,9 +6961,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                   ),
               ],
             ),
-            
+
             const SizedBox(height: 24),
-            
+
             // App Info Section
             _buildSettingsSection(
               context,
@@ -6163,15 +6972,24 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 _buildSettingsTile(
                   context,
                   icon: Icons.info_outline,
-                  title: AppLocalizations.translate('app_version', currentLanguage),
+                  title: AppLocalizations.translate(
+                    'app_version',
+                    currentLanguage,
+                  ),
                   subtitle: '1.0.0',
                   onTap: null,
                 ),
                 _buildSettingsTile(
                   context,
                   icon: Icons.privacy_tip_outlined,
-                  title: AppLocalizations.translate('privacy_policy', currentLanguage),
-                  subtitle: AppLocalizations.translate('view_privacy_policy', currentLanguage),
+                  title: AppLocalizations.translate(
+                    'privacy_policy',
+                    currentLanguage,
+                  ),
+                  subtitle: AppLocalizations.translate(
+                    'view_privacy_policy',
+                    currentLanguage,
+                  ),
                   onTap: () {
                     // TODO: Open privacy policy
                   },
@@ -6184,7 +7002,11 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     );
   }
 
-  Widget _buildSettingsSection(BuildContext context, String title, List<Widget> children) {
+  Widget _buildSettingsSection(
+    BuildContext context,
+    String title,
+    List<Widget> children,
+  ) {
     return Card(
       elevation: 0,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
@@ -6195,9 +7017,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           children: [
             Text(
               title,
-              style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                fontWeight: FontWeight.bold,
-              ),
+              style: Theme.of(
+                context,
+              ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 12),
             ...children,
@@ -6228,7 +7050,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
-        title: Text(AppLocalizations.translate('select_language', currentLanguage)),
+        title: Text(
+          AppLocalizations.translate('select_language', currentLanguage),
+        ),
         content: SizedBox(
           width: double.minPositive,
           child: ListView.builder(
@@ -6238,10 +7062,12 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               final languageCode = languages.keys.elementAt(index);
               final languageName = languages.values.elementAt(index);
               final isSelected = currentLanguage == languageCode;
-              
+
               return ListTile(
                 title: Text(languageName),
-                trailing: isSelected ? const Icon(Icons.check, color: Colors.green) : null,
+                trailing: isSelected
+                    ? const Icon(Icons.check, color: Colors.green)
+                    : null,
                 onTap: () async {
                   ref.read(languageProvider.notifier).setLanguage(languageCode);
                   await SettingsNotifier.saveLanguage(languageCode);
@@ -6266,7 +7092,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
-        title: Text(AppLocalizations.translate('select_currency', currentLanguage)),
+        title: Text(
+          AppLocalizations.translate('select_currency', currentLanguage),
+        ),
         content: SizedBox(
           width: double.minPositive,
           child: ListView.builder(
@@ -6276,10 +7104,12 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               final currencyCode = currencies.keys.elementAt(index);
               final currencyName = currencies.values.elementAt(index);
               final isSelected = currentCurrency == currencyCode;
-              
+
               return ListTile(
                 title: Text(currencyName),
-                trailing: isSelected ? const Icon(Icons.check, color: Colors.green) : null,
+                trailing: isSelected
+                    ? const Icon(Icons.check, color: Colors.green)
+                    : null,
                 onTap: () async {
                   ref.read(currencyProvider.notifier).setCurrency(currencyCode);
                   await SettingsNotifier.saveCurrency(currencyCode);
@@ -6318,7 +7148,10 @@ class _ReceiptScanScreenState extends ConsumerState<ReceiptScanScreen> {
     setState(() => _isProcessing = true);
     try {
       final ImagePicker picker = ImagePicker();
-      final XFile? file = await picker.pickImage(source: source, imageQuality: 85);
+      final XFile? file = await picker.pickImage(
+        source: source,
+        imageQuality: 85,
+      );
       if (file == null) return;
       final InputImage input = InputImage.fromFilePath(file.path);
       final textRecognizer = TextRecognizer();
@@ -6337,8 +7170,10 @@ class _ReceiptScanScreenState extends ConsumerState<ReceiptScanScreen> {
 
   int? _parseTotalToCents(String text) {
     final lines = text.split('\n');
-    final RegExp money = RegExp(r"(total|amount)\s*[:\-]?\s*\$?\s*([0-9]+[\.,][0-9]{2})",
-        caseSensitive: false);
+    final RegExp money = RegExp(
+      r"(total|amount)\s*[:\-]?\s*\$?\s*([0-9]+[\.,][0-9]{2})",
+      caseSensitive: false,
+    );
     for (final line in lines.reversed) {
       final m = money.firstMatch(line);
       if (m != null) {
@@ -6362,8 +7197,9 @@ class _ReceiptScanScreenState extends ConsumerState<ReceiptScanScreen> {
 
   Future<void> _createExpenseFromScan() async {
     final user = fb.FirebaseAuth.instance.currentUser;
-    if (user == null || _selectedGroupId == null || _parsedTotalCents == null) return;
-    
+    if (user == null || _selectedGroupId == null || _parsedTotalCents == null)
+      return;
+
     final expense = Expense(
       id: 'new',
       groupId: _selectedGroupId!,
@@ -6373,10 +7209,10 @@ class _ReceiptScanScreenState extends ConsumerState<ReceiptScanScreen> {
       splitUserIds: [user.uid],
       createdAtMs: DateTime.now().millisecondsSinceEpoch,
     );
-    
+
     // Check if we're in developer mode
     final devMode = ref.read(developerModeProvider);
-    
+
     if (devMode) {
       // Add to developer data
       addDeveloperExpense(_selectedGroupId!, expense);
@@ -6396,9 +7232,9 @@ class _ReceiptScanScreenState extends ConsumerState<ReceiptScanScreen> {
         context.go('/groups/${_selectedGroupId!}/analysis');
       } catch (e) {
         if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error creating expense: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Error creating expense: $e')));
       }
     }
   }
@@ -6412,25 +7248,28 @@ class _ReceiptScanScreenState extends ConsumerState<ReceiptScanScreen> {
       body: VStack([
         'Scan a receipt to auto-extract the total.'.text.make(),
         16.heightBox,
-        Wrap(spacing: 8, children: [
-        ElevatedButton.icon(
-            onPressed: _isProcessing ? null : () => _pick(ImageSource.camera),
-          icon: const Icon(Icons.camera_alt_outlined),
-          label: const Text('Open Camera'),
+        Wrap(
+          spacing: 8,
+          children: [
+            ElevatedButton.icon(
+              onPressed: _isProcessing ? null : () => _pick(ImageSource.camera),
+              icon: const Icon(Icons.camera_alt_outlined),
+              label: const Text('Open Camera'),
+            ),
+            ElevatedButton.icon(
+              onPressed: _isProcessing
+                  ? null
+                  : () => _pick(ImageSource.gallery),
+              icon: const Icon(Icons.photo_library_outlined),
+              label: const Text('Pick from Gallery'),
+            ),
+          ],
         ),
-        ElevatedButton.icon(
-            onPressed: _isProcessing ? null : () => _pick(ImageSource.gallery),
-          icon: const Icon(Icons.photo_library_outlined),
-          label: const Text('Pick from Gallery'),
-        ),
-        ]),
-        if (_isProcessing) ...[
-          16.heightBox,
-          const LinearProgressIndicator(),
-        ],
+        if (_isProcessing) ...[16.heightBox, const LinearProgressIndicator()],
         if (_recognizedText != null) 16.heightBox,
         if (_parsedTotalCents != null)
-          ('Detected total: ${_formatCents(_parsedTotalCents!)}').text.bold.make(),
+          ('Detected total: ${_formatCents(_parsedTotalCents!)}').text.bold
+              .make(),
         if (user != null && _parsedTotalCents != null) ...[
           16.heightBox,
           'Choose group'.text.bold.make(),
@@ -6438,7 +7277,7 @@ class _ReceiptScanScreenState extends ConsumerState<ReceiptScanScreen> {
           Consumer(
             builder: (context, ref, _) {
               final devMode = ref.watch(developerModeProvider);
-              
+
               if (devMode) {
                 // Developer mode - use developer groups
                 final groups = ref.watch(developerGroupsProvider);
@@ -6448,7 +7287,10 @@ class _ReceiptScanScreenState extends ConsumerState<ReceiptScanScreen> {
                   value: _selectedGroupId,
                   items: [
                     for (final g in groups)
-                      DropdownMenuItem<String>(value: g.id, child: Text(g.name))
+                      DropdownMenuItem<String>(
+                        value: g.id,
+                        child: Text(g.name),
+                      ),
                   ],
                   onChanged: (v) => setState(() => _selectedGroupId = v),
                 );
@@ -6458,13 +7300,17 @@ class _ReceiptScanScreenState extends ConsumerState<ReceiptScanScreen> {
                   stream: repo.watchGroups(user.uid),
                   builder: (context, snap) {
                     final groups = snap.data ?? const <Group>[];
-                    if (groups.isEmpty) return const Text('No groups available.');
+                    if (groups.isEmpty)
+                      return const Text('No groups available.');
                     _selectedGroupId ??= groups.first.id;
                     return DropdownButton<String>(
                       value: _selectedGroupId,
                       items: [
                         for (final g in groups)
-                          DropdownMenuItem<String>(value: g.id, child: Text(g.name))
+                          DropdownMenuItem<String>(
+                            value: g.id,
+                            child: Text(g.name),
+                          ),
                       ],
                       onChanged: (v) => setState(() => _selectedGroupId = v),
                     );
@@ -6486,11 +7332,8 @@ class _ReceiptScanScreenState extends ConsumerState<ReceiptScanScreen> {
 }
 
 class GroupAnalysisScreen extends ConsumerWidget {
-  const GroupAnalysisScreen({
-    super.key,
-    required this.groupId,
-  });
-  
+  const GroupAnalysisScreen({super.key, required this.groupId});
+
   final String groupId;
 
   Future<String> _formatCentsWithConversion(int cents, WidgetRef ref) async {
@@ -6499,28 +7342,38 @@ class GroupAnalysisScreen extends ConsumerWidget {
   }
 
   String _formatCents(int cents) {
-    return CurrencyFormatter.formatCents(cents, 'USD'); // Default for now, will be improved later
+    return CurrencyFormatter.formatCents(
+      cents,
+      'USD',
+    ); // Default for now, will be improved later
   }
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final devMode = ref.watch(developerModeProvider);
-    
+
     if (devMode) {
       // Developer mode - use local data
-      final group = ref.watch(developerGroupsProvider).firstWhere(
-        (g) => g.id == groupId,
-        orElse: () => const Group(id: '', name: '', memberUserIds: [], createdAtMs: 0),
-      );
+      final group = ref
+          .watch(developerGroupsProvider)
+          .firstWhere(
+            (g) => g.id == groupId,
+            orElse: () => const Group(
+              id: '',
+              name: '',
+              memberUserIds: [],
+              createdAtMs: 0,
+            ),
+          );
       final expenses = ref.watch(developerExpensesProvider(groupId));
-      
+
       if (group.id.isEmpty) {
         return Scaffold(
           appBar: AppBar(title: const Text('Group Analysis')),
           body: const Center(child: Text('Group not found')),
         );
       }
-      
+
       return _buildAnalysisScreen(context, ref, group, expenses);
     } else {
       // Real user mode - show skeleton first, then load data
@@ -6536,7 +7389,7 @@ class GroupAnalysisScreen extends ConsumerWidget {
         if (groupSnapshot.connectionState == ConnectionState.waiting) {
           return _buildSkeletonAnalysisScreen(context);
         }
-        
+
         if (groupSnapshot.hasError || !groupSnapshot.hasData) {
           return Scaffold(
             appBar: AppBar(title: const Text('Group Analysis')),
@@ -6548,23 +7401,33 @@ class GroupAnalysisScreen extends ConsumerWidget {
                   SizedBox(height: 16),
                   Text('Group not found or connection timeout'),
                   SizedBox(height: 8),
-                  Text('Please check your connection and try again', style: TextStyle(color: Colors.grey)),
+                  Text(
+                    'Please check your connection and try again',
+                    style: TextStyle(color: Colors.grey),
+                  ),
                 ],
               ),
             ),
           );
         }
-        
+
         final group = groupSnapshot.data!;
-        
+
         return StreamBuilder<List<Expense>>(
           stream: ref.watch(firestoreRepositoryProvider).watchExpenses(groupId),
           builder: (context, expensesSnapshot) {
             // Always show the screen with available data, even while loading expenses
             final expenses = expensesSnapshot.data ?? [];
-            final isLoadingExpenses = expensesSnapshot.connectionState == ConnectionState.waiting;
-            
-            return _buildAnalysisScreen(context, ref, group, expenses, isLoadingExpenses: isLoadingExpenses);
+            final isLoadingExpenses =
+                expensesSnapshot.connectionState == ConnectionState.waiting;
+
+            return _buildAnalysisScreen(
+              context,
+              ref,
+              group,
+              expenses,
+              isLoadingExpenses: isLoadingExpenses,
+            );
           },
         );
       },
@@ -6598,12 +7461,12 @@ class GroupAnalysisScreen extends ConsumerWidget {
               ],
             ),
             const SizedBox(height: 24),
-            
+
             // Skeleton member summary
             _buildSkeletonCard(height: 200),
-            
+
             const SizedBox(height: 24),
-            
+
             // Skeleton expense breakdown
             _buildSkeletonCard(height: 300),
           ],
@@ -6619,14 +7482,17 @@ class GroupAnalysisScreen extends ConsumerWidget {
         color: Colors.grey.shade200,
         borderRadius: BorderRadius.circular(12),
       ),
-      child: const Center(
-        child: CircularProgressIndicator(),
-      ),
+      child: const Center(child: CircularProgressIndicator()),
     );
   }
 
-  Widget _buildAnalysisScreen(BuildContext context, WidgetRef ref, Group group, List<Expense> expenses, {bool isLoadingExpenses = false}) {
-
+  Widget _buildAnalysisScreen(
+    BuildContext context,
+    WidgetRef ref,
+    Group group,
+    List<Expense> expenses, {
+    bool isLoadingExpenses = false,
+  }) {
     return Scaffold(
       backgroundColor: Theme.of(context).colorScheme.surface,
       appBar: AppBar(
@@ -6663,18 +7529,29 @@ class GroupAnalysisScreen extends ConsumerWidget {
       ),
     );
   }
-  
-  Widget _buildOverviewSection(BuildContext context, Group group, List<Expense> expenses, WidgetRef ref) {
-    final totalAmount = expenses.fold<int>(0, (sum, expense) => sum + expense.amountCents);
+
+  Widget _buildOverviewSection(
+    BuildContext context,
+    Group group,
+    List<Expense> expenses,
+    WidgetRef ref,
+  ) {
+    final totalAmount = expenses.fold<int>(
+      0,
+      (sum, expense) => sum + expense.amountCents,
+    );
     final activeMembersCount = group.memberUserIds.length;
-    final avgPerPerson = activeMembersCount > 0 ? totalAmount / activeMembersCount : 0;
-    
+    final avgPerPerson = activeMembersCount > 0
+        ? totalAmount / activeMembersCount
+        : 0;
+
     // Calculate settlements for more useful metrics
     final settlements = _calculateGroupSettlementsDetailed(group, expenses);
     final pendingSettlements = settlements.length;
-    
+
     // Calculate current user's balance
-    final currentUserId = fb.FirebaseAuth.instance.currentUser?.uid ?? 'dev_user_123';
+    final currentUserId =
+        fb.FirebaseAuth.instance.currentUser?.uid ?? 'dev_user_123';
     int userBalance = 0;
     for (final settlement in settlements) {
       if (settlement.debtorId == currentUserId) {
@@ -6683,13 +7560,17 @@ class GroupAnalysisScreen extends ConsumerWidget {
         userBalance += settlement.amount; // User is owed money
       }
     }
-    
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Row(
           children: [
-            Icon(Icons.analytics, color: Theme.of(context).colorScheme.primary, size: 24),
+            Icon(
+              Icons.analytics,
+              color: Theme.of(context).colorScheme.primary,
+              size: 24,
+            ),
             const SizedBox(width: 8),
             Text(
               'Group Overview',
@@ -6735,30 +7616,36 @@ class GroupAnalysisScreen extends ConsumerWidget {
           children: [
             Expanded(
               child: FutureBuilder<String>(
-                future: userBalance == 0 
-                  ? Future.value('Even')
-                  : userBalance > 0 
-                    ? _formatCentsWithConversion(userBalance, ref).then((amount) => '+$amount')
-                    : _formatCentsWithConversion(userBalance.abs(), ref).then((amount) => '-$amount'),
+                future: userBalance == 0
+                    ? Future.value('Even')
+                    : userBalance > 0
+                    ? _formatCentsWithConversion(
+                        userBalance,
+                        ref,
+                      ).then((amount) => '+$amount')
+                    : _formatCentsWithConversion(
+                        userBalance.abs(),
+                        ref,
+                      ).then((amount) => '-$amount'),
                 builder: (context, snapshot) {
-                  final balanceText = userBalance == 0 
-                    ? 'Even' 
-                    : userBalance > 0 
-                      ? '+${_formatCents(userBalance)}' 
+                  final balanceText = userBalance == 0
+                      ? 'Even'
+                      : userBalance > 0
+                      ? '+${_formatCents(userBalance)}'
                       : _formatCents(userBalance);
                   return _buildOverviewCard(
                     context,
                     'Your Balance',
                     snapshot.data ?? balanceText,
-                    userBalance == 0 
-                      ? Icons.check_circle 
-                      : userBalance > 0 
-                        ? Icons.trending_up 
+                    userBalance == 0
+                        ? Icons.check_circle
+                        : userBalance > 0
+                        ? Icons.trending_up
                         : Icons.trending_down,
-                    userBalance == 0 
-                      ? Colors.green 
-                      : userBalance > 0 
-                        ? Colors.blue 
+                    userBalance == 0
+                        ? Colors.green
+                        : userBalance > 0
+                        ? Colors.blue
                         : Colors.red,
                   );
                 },
@@ -6784,8 +7671,14 @@ class GroupAnalysisScreen extends ConsumerWidget {
       ],
     );
   }
-  
-  Widget _buildOverviewCard(BuildContext context, String title, String value, IconData icon, Color color) {
+
+  Widget _buildOverviewCard(
+    BuildContext context,
+    String title,
+    String value,
+    IconData icon,
+    Color color,
+  ) {
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
@@ -6831,14 +7724,23 @@ class GroupAnalysisScreen extends ConsumerWidget {
       ),
     );
   }
-  
-  Widget _buildMemberSummarySection(BuildContext context, Group group, List<Expense> expenses, WidgetRef ref) {
+
+  Widget _buildMemberSummarySection(
+    BuildContext context,
+    Group group,
+    List<Expense> expenses,
+    WidgetRef ref,
+  ) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Row(
           children: [
-            Icon(Icons.people, color: Theme.of(context).colorScheme.primary, size: 24),
+            Icon(
+              Icons.people,
+              color: Theme.of(context).colorScheme.primary,
+              size: 24,
+            ),
             const SizedBox(width: 8),
             Text(
               'Member Summary',
@@ -6851,19 +7753,31 @@ class GroupAnalysisScreen extends ConsumerWidget {
           ],
         ),
         const SizedBox(height: 16),
-        ...group.memberUserIds.map((memberId) => _buildMemberCard(context, memberId, expenses, ref)),
+        ...group.memberUserIds.map(
+          (memberId) => _buildMemberCard(context, memberId, expenses, ref),
+        ),
       ],
     );
   }
-  
-  Widget _buildMemberCard(BuildContext context, String memberId, List<Expense> expenses, WidgetRef ref) {
-    final memberExpenses = expenses.where((e) => e.paidByUserId == memberId).toList();
-    final totalPaid = memberExpenses.fold<int>(0, (sum, e) => sum + e.amountCents);
+
+  Widget _buildMemberCard(
+    BuildContext context,
+    String memberId,
+    List<Expense> expenses,
+    WidgetRef ref,
+  ) {
+    final memberExpenses = expenses
+        .where((e) => e.paidByUserId == memberId)
+        .toList();
+    final totalPaid = memberExpenses.fold<int>(
+      0,
+      (sum, e) => sum + e.amountCents,
+    );
     final totalOwed = expenses.fold<int>(0, (sum, expense) {
       return sum + _getOwedAmount(expense, memberId);
     });
     final netBalance = totalPaid - totalOwed;
-    
+
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
       padding: const EdgeInsets.all(20),
@@ -6919,23 +7833,36 @@ class GroupAnalysisScreen extends ConsumerWidget {
                 ),
               ),
               FutureBuilder<String>(
-                future: netBalance >= 0 
-                  ? _formatCentsWithConversion(netBalance.abs(), ref).then((amount) => '+$amount')
-                  : _formatCentsWithConversion(netBalance.abs(), ref).then((amount) => '-$amount'),
+                future: netBalance >= 0
+                    ? _formatCentsWithConversion(
+                        netBalance.abs(),
+                        ref,
+                      ).then((amount) => '+$amount')
+                    : _formatCentsWithConversion(
+                        netBalance.abs(),
+                        ref,
+                      ).then((amount) => '-$amount'),
                 builder: (context, snapshot) {
-                  final fallbackText = netBalance >= 0 
-                    ? '+${_formatCents(netBalance.abs())}'
-                    : '-${_formatCents(netBalance.abs())}';
+                  final fallbackText = netBalance >= 0
+                      ? '+${_formatCents(netBalance.abs())}'
+                      : '-${_formatCents(netBalance.abs())}';
                   return Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 6,
+                    ),
                     decoration: BoxDecoration(
-                      color: netBalance >= 0 ? Colors.green.shade100 : Colors.red.shade100,
+                      color: netBalance >= 0
+                          ? Colors.green.shade100
+                          : Colors.red.shade100,
                       borderRadius: BorderRadius.circular(20),
                     ),
                     child: Text(
                       snapshot.data ?? fallbackText,
                       style: TextStyle(
-                        color: netBalance >= 0 ? Colors.green.shade800 : Colors.red.shade800,
+                        color: netBalance >= 0
+                            ? Colors.green.shade800
+                            : Colors.red.shade800,
                         fontWeight: FontWeight.bold,
                         fontSize: 16,
                       ),
@@ -6952,7 +7879,11 @@ class GroupAnalysisScreen extends ConsumerWidget {
                 child: FutureBuilder<String>(
                   future: _formatCentsWithConversion(totalPaid, ref),
                   builder: (context, snapshot) {
-                    return _buildMemberStat('Paid', snapshot.data ?? _formatCents(totalPaid), Colors.green);
+                    return _buildMemberStat(
+                      'Paid',
+                      snapshot.data ?? _formatCents(totalPaid),
+                      Colors.green,
+                    );
                   },
                 ),
               ),
@@ -6961,22 +7892,32 @@ class GroupAnalysisScreen extends ConsumerWidget {
                 child: FutureBuilder<String>(
                   future: _formatCentsWithConversion(totalOwed, ref),
                   builder: (context, snapshot) {
-                    return _buildMemberStat('Owes', snapshot.data ?? _formatCents(totalOwed), Colors.orange);
+                    return _buildMemberStat(
+                      'Owes',
+                      snapshot.data ?? _formatCents(totalOwed),
+                      Colors.orange,
+                    );
                   },
                 ),
               ),
               const SizedBox(width: 16),
               Expanded(
                 child: FutureBuilder<String>(
-                  future: netBalance >= 0 
-                    ? _formatCentsWithConversion(netBalance.abs(), ref).then((amount) => '+$amount')
-                    : _formatCentsWithConversion(netBalance.abs(), ref).then((amount) => '-$amount'),
+                  future: netBalance >= 0
+                      ? _formatCentsWithConversion(
+                          netBalance.abs(),
+                          ref,
+                        ).then((amount) => '+$amount')
+                      : _formatCentsWithConversion(
+                          netBalance.abs(),
+                          ref,
+                        ).then((amount) => '-$amount'),
                   builder: (context, snapshot) {
-                    final fallbackText = netBalance >= 0 
-                      ? '+${_formatCents(netBalance.abs())}'
-                      : '-${_formatCents(netBalance.abs())}';
+                    final fallbackText = netBalance >= 0
+                        ? '+${_formatCents(netBalance.abs())}'
+                        : '-${_formatCents(netBalance.abs())}';
                     return _buildMemberStat(
-                      'Balance', 
+                      'Balance',
                       snapshot.data ?? fallbackText,
                       netBalance >= 0 ? Colors.green : Colors.red,
                     );
@@ -6989,7 +7930,7 @@ class GroupAnalysisScreen extends ConsumerWidget {
       ),
     );
   }
-  
+
   Widget _buildMemberStat(String label, String value, Color color) {
     return Column(
       children: [
@@ -7003,23 +7944,28 @@ class GroupAnalysisScreen extends ConsumerWidget {
         ),
         Text(
           label,
-          style: TextStyle(
-            fontSize: 12,
-            color: Colors.grey.shade600,
-          ),
+          style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
         ),
       ],
     );
   }
-  
-  Widget _buildAllExpensesSection(BuildContext context, List<Expense> expenses, WidgetRef ref) {
+
+  Widget _buildAllExpensesSection(
+    BuildContext context,
+    List<Expense> expenses,
+    WidgetRef ref,
+  ) {
     if (expenses.isEmpty) {
       return Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              Icon(Icons.receipt_long, color: Theme.of(context).colorScheme.primary, size: 24),
+              Icon(
+                Icons.receipt_long,
+                color: Theme.of(context).colorScheme.primary,
+                size: 24,
+              ),
               const SizedBox(width: 8),
               Text(
                 'All Expenses',
@@ -7052,7 +7998,11 @@ class GroupAnalysisScreen extends ConsumerWidget {
             ),
             child: Column(
               children: [
-                Icon(Icons.receipt_long, size: 48, color: Theme.of(context).colorScheme.onSurfaceVariant),
+                Icon(
+                  Icons.receipt_long,
+                  size: 48,
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
                 const SizedBox(height: 16),
                 Text(
                   'No expenses yet',
@@ -7067,7 +8017,9 @@ class GroupAnalysisScreen extends ConsumerWidget {
                   'Add your first expense to start tracking and splitting costs with your group',
                   textAlign: TextAlign.center,
                   style: TextStyle(
-                    color: Theme.of(context).colorScheme.onSurfaceVariant.withOpacity(0.7),
+                    color: Theme.of(
+                      context,
+                    ).colorScheme.onSurfaceVariant.withOpacity(0.7),
                   ),
                 ),
               ],
@@ -7076,13 +8028,17 @@ class GroupAnalysisScreen extends ConsumerWidget {
         ],
       );
     }
-    
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Row(
           children: [
-            Icon(Icons.receipt_long, color: Theme.of(context).colorScheme.primary, size: 24),
+            Icon(
+              Icons.receipt_long,
+              color: Theme.of(context).colorScheme.primary,
+              size: 24,
+            ),
             const SizedBox(width: 8),
             Text(
               'All Expenses (${expenses.length})',
@@ -7095,12 +8051,18 @@ class GroupAnalysisScreen extends ConsumerWidget {
           ],
         ),
         const SizedBox(height: 16),
-        ...expenses.map((expense) => _buildDetailedExpenseCard(context, expense, ref)),
+        ...expenses.map(
+          (expense) => _buildDetailedExpenseCard(context, expense, ref),
+        ),
       ],
     );
   }
-  
-  Widget _buildDetailedExpenseCard(BuildContext context, Expense expense, WidgetRef ref) {
+
+  Widget _buildDetailedExpenseCard(
+    BuildContext context,
+    Expense expense,
+    WidgetRef ref,
+  ) {
     return Container(
       margin: const EdgeInsets.only(bottom: 16),
       padding: const EdgeInsets.all(20),
@@ -7148,7 +8110,10 @@ class GroupAnalysisScreen extends ConsumerWidget {
                 ),
               ),
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 8,
+                ),
                 decoration: BoxDecoration(
                   gradient: LinearGradient(
                     colors: [
@@ -7160,12 +8125,16 @@ class GroupAnalysisScreen extends ConsumerWidget {
                   ),
                   borderRadius: BorderRadius.circular(24),
                   border: Border.all(
-                    color: Theme.of(context).colorScheme.primary.withOpacity(0.3),
+                    color: Theme.of(
+                      context,
+                    ).colorScheme.primary.withOpacity(0.3),
                     width: 1,
                   ),
                   boxShadow: [
                     BoxShadow(
-                      color: Theme.of(context).colorScheme.primary.withOpacity(0.25),
+                      color: Theme.of(
+                        context,
+                      ).colorScheme.primary.withOpacity(0.25),
                       blurRadius: 8,
                       offset: const Offset(0, 2),
                     ),
@@ -7210,7 +8179,10 @@ class GroupAnalysisScreen extends ConsumerWidget {
                   ),
                 ),
                 const SizedBox(height: 12),
-                ...expense.splitUserIds.map((userId) => _buildParticipantRow(context, expense, userId, ref)),
+                ...expense.splitUserIds.map(
+                  (userId) =>
+                      _buildParticipantRow(context, expense, userId, ref),
+                ),
               ],
             ),
           ),
@@ -7218,26 +8190,31 @@ class GroupAnalysisScreen extends ConsumerWidget {
       ),
     );
   }
-  
-  Widget _buildParticipantRow(BuildContext context, Expense expense, String userId, WidgetRef ref) {
+
+  Widget _buildParticipantRow(
+    BuildContext context,
+    Expense expense,
+    String userId,
+    WidgetRef ref,
+  ) {
     final owedAmount = _getOwedAmount(expense, userId);
     final isPayer = userId == expense.paidByUserId;
-    
+
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4),
       child: Row(
         children: [
           CircleAvatar(
             radius: 12,
-            backgroundColor: isPayer 
-              ? Theme.of(context).colorScheme.primaryContainer
-              : Theme.of(context).colorScheme.surfaceContainerHighest,
+            backgroundColor: isPayer
+                ? Theme.of(context).colorScheme.primaryContainer
+                : Theme.of(context).colorScheme.surfaceContainerHighest,
             child: Text(
               _getUserDisplayName(userId)[0].toUpperCase(),
               style: TextStyle(
-                color: isPayer 
-                  ? Theme.of(context).colorScheme.onPrimaryContainer
-                  : Theme.of(context).colorScheme.onSurfaceVariant,
+                color: isPayer
+                    ? Theme.of(context).colorScheme.onPrimaryContainer
+                    : Theme.of(context).colorScheme.onSurfaceVariant,
                 fontWeight: FontWeight.bold,
                 fontSize: 10,
               ),
@@ -7260,9 +8237,9 @@ class GroupAnalysisScreen extends ConsumerWidget {
                 snapshot.data ?? _formatCents(owedAmount),
                 style: TextStyle(
                   fontWeight: FontWeight.w600,
-                  color: isPayer 
-                    ? Theme.of(context).colorScheme.primary
-                    : Theme.of(context).colorScheme.onSurfaceVariant,
+                  color: isPayer
+                      ? Theme.of(context).colorScheme.primary
+                      : Theme.of(context).colorScheme.onSurfaceVariant,
                   fontSize: 14,
                 ),
               );
@@ -7281,7 +8258,9 @@ class GroupAnalysisScreen extends ConsumerWidget {
                 ),
                 boxShadow: [
                   BoxShadow(
-                    color: Theme.of(context).colorScheme.primary.withOpacity(0.15),
+                    color: Theme.of(
+                      context,
+                    ).colorScheme.primary.withOpacity(0.15),
                     blurRadius: 4,
                     offset: const Offset(0, 1),
                   ),
@@ -7300,23 +8279,34 @@ class GroupAnalysisScreen extends ConsumerWidget {
       ),
     );
   }
-  
-  Widget _buildSettlementSection(BuildContext context, Group group, List<Expense> expenses, WidgetRef ref) {
+
+  Widget _buildSettlementSection(
+    BuildContext context,
+    Group group,
+    List<Expense> expenses,
+    WidgetRef ref,
+  ) {
     final settlements = _calculateGroupSettlementsDetailed(group, expenses);
-    
+
     // Debug: Print settlement info
     print('DEBUG: Group ${group.name} has ${expenses.length} expenses');
     print('DEBUG: Calculated ${settlements.length} settlements');
     for (final settlement in settlements) {
-      print('DEBUG: ${_getUserDisplayName(settlement.debtorId)} owes ${_formatCents(settlement.amount)} to ${_getUserDisplayName(settlement.creditorId)}');
+      print(
+        'DEBUG: ${_getUserDisplayName(settlement.debtorId)} owes ${_formatCents(settlement.amount)} to ${_getUserDisplayName(settlement.creditorId)}',
+      );
     }
-    
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Row(
           children: [
-            Icon(Icons.handshake, color: Theme.of(context).colorScheme.primary, size: 24),
+            Icon(
+              Icons.handshake,
+              color: Theme.of(context).colorScheme.primary,
+              size: 24,
+            ),
             const SizedBox(width: 8),
             Text(
               'Settlement Recommendations',
@@ -7340,7 +8330,11 @@ class GroupAnalysisScreen extends ConsumerWidget {
             ),
             child: Column(
               children: [
-                Icon(Icons.check_circle, color: Colors.green.shade600, size: 48),
+                Icon(
+                  Icons.check_circle,
+                  color: Colors.green.shade600,
+                  size: 48,
+                ),
                 const SizedBox(height: 16),
                 Text(
                   'All Settled Up!',
@@ -7353,24 +8347,28 @@ class GroupAnalysisScreen extends ConsumerWidget {
                 const SizedBox(height: 8),
                 Text(
                   'Everyone is even. No payments needed.',
-                  style: TextStyle(
-                    color: Colors.green.shade600,
-                  ),
+                  style: TextStyle(color: Colors.green.shade600),
                 ),
               ],
             ),
           )
         else
-          ...settlements.map((settlement) => _buildSettlementCard(context, settlement, ref)),
+          ...settlements.map(
+            (settlement) => _buildSettlementCard(context, settlement, ref),
+          ),
       ],
     );
   }
-  
-  Widget _buildSettlementCard(BuildContext context, SettlementInfo settlement, WidgetRef ref) {
+
+  Widget _buildSettlementCard(
+    BuildContext context,
+    SettlementInfo settlement,
+    WidgetRef ref,
+  ) {
     final debtorPhone = _getUserPhoneNumber(settlement.debtorId);
     final creditorPhone = _getUserPhoneNumber(settlement.creditorId);
     final canUseSwish = debtorPhone != null && creditorPhone != null;
-    
+
     return Container(
       margin: const EdgeInsets.only(bottom: 16),
       padding: const EdgeInsets.all(20),
@@ -7390,7 +8388,11 @@ class GroupAnalysisScreen extends ConsumerWidget {
                   color: Colors.orange.shade200,
                   borderRadius: BorderRadius.circular(8),
                 ),
-                child: Icon(Icons.arrow_forward, color: Colors.orange.shade800, size: 20),
+                child: Icon(
+                  Icons.arrow_forward,
+                  color: Colors.orange.shade800,
+                  size: 20,
+                ),
               ),
               const SizedBox(width: 16),
               Expanded(
@@ -7407,7 +8409,10 @@ class GroupAnalysisScreen extends ConsumerWidget {
                     ),
                     const SizedBox(height: 4),
                     FutureBuilder<String>(
-                      future: _formatCentsWithConversion(settlement.amount, ref),
+                      future: _formatCentsWithConversion(
+                        settlement.amount,
+                        ref,
+                      ),
                       builder: (context, snapshot) {
                         return Text(
                           snapshot.data ?? _formatCents(settlement.amount),
@@ -7427,7 +8432,8 @@ class GroupAnalysisScreen extends ConsumerWidget {
           const SizedBox(height: 16),
           Row(
             children: [
-              if (canUseSwish && settlement.debtorId == 'dev_user_123') ...[  // Only show when you owe money
+              if (canUseSwish && settlement.debtorId == 'dev_user_123') ...[
+                // Only show when you owe money
                 Expanded(
                   child: ElevatedButton.icon(
                     onPressed: () => _handleSwishPayment(context, settlement),
@@ -7494,15 +8500,19 @@ class GroupAnalysisScreen extends ConsumerWidget {
       ),
     );
   }
-  
-  Future<void> _handleSwishPayment(BuildContext context, SettlementInfo settlement) async {
+
+  Future<void> _handleSwishPayment(
+    BuildContext context,
+    SettlementInfo settlement,
+  ) async {
     // Only handle outgoing payments (when you owe money)
     final targetPhone = _getUserPhoneNumber(settlement.creditorId);
-    
+
     if (targetPhone == null) return;
-    
-    final message = 'Expense settlement - ${_getUserDisplayName(settlement.debtorId)} to ${_getUserDisplayName(settlement.creditorId)}';
-    
+
+    final message =
+        'Expense settlement - ${_getUserDisplayName(settlement.debtorId)} to ${_getUserDisplayName(settlement.creditorId)}';
+
     // Show Swish payment dialog
     await _showSwishPaymentDialog(
       context: context,
@@ -7512,7 +8522,7 @@ class GroupAnalysisScreen extends ConsumerWidget {
       isOutgoingPayment: true, // Always true now
     );
   }
-  
+
   void _markAsSettled(BuildContext context, SettlementInfo settlement) {
     showDialog(
       context: context,
@@ -7578,31 +8588,37 @@ class GroupAnalysisScreen extends ConsumerWidget {
               );
             },
             style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
-            child: const Text('Confirm Payment', style: TextStyle(color: Colors.white)),
+            child: const Text(
+              'Confirm Payment',
+              style: TextStyle(color: Colors.white),
+            ),
           ),
         ],
       ),
     );
   }
-  
-  
-  List<SettlementInfo> _calculateGroupSettlementsDetailed(Group group, List<Expense> expenses) {
+
+  List<SettlementInfo> _calculateGroupSettlementsDetailed(
+    Group group,
+    List<Expense> expenses,
+  ) {
     final balances = <String, int>{};
-    
+
     // Calculate net balance for each member
     for (final memberId in group.memberUserIds) {
-      final totalPaid = expenses.where((e) => e.paidByUserId == memberId)
+      final totalPaid = expenses
+          .where((e) => e.paidByUserId == memberId)
           .fold<int>(0, (sum, e) => sum + e.amountCents);
       final totalOwed = expenses.fold<int>(0, (sum, expense) {
         return sum + _getOwedAmount(expense, memberId);
       });
       balances[memberId] = totalPaid - totalOwed;
     }
-    
+
     // Use greedy algorithm to minimize number of transactions
     return _greedyDebtSettlement(balances);
   }
-  
+
   // Keep the old method for compatibility with other parts of the app
   String _getSplitModeText(SplitMode mode) {
     switch (mode) {
@@ -7614,7 +8630,7 @@ class GroupAnalysisScreen extends ConsumerWidget {
         return 'Percentage Split';
     }
   }
-  
+
   int _getOwedAmount(Expense expense, String userId) {
     switch (expense.splitMode) {
       case SplitMode.equal:
@@ -7637,12 +8653,12 @@ class NoisePainter extends CustomPainter {
       ..style = PaintingStyle.fill;
 
     final random = Random(42); // Fixed seed for consistent noise
-    
+
     for (int i = 0; i < 2000; i++) {
       final x = random.nextDouble() * size.width;
       final y = random.nextDouble() * size.height;
       final radius = random.nextDouble() * 1.5 + 0.5;
-      
+
       canvas.drawCircle(Offset(x, y), radius, paint);
     }
   }
@@ -7657,41 +8673,39 @@ class ExpenseDetailScreen extends ConsumerWidget {
     required this.groupId,
     required this.expenseId,
   });
-  
+
   final String groupId;
   final String expenseId;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final devMode = ref.watch(developerModeProvider);
-    
+
     // Get the expense data
-    final expense = devMode 
-      ? ref.watch(developerExpensesProvider(groupId)).firstWhere(
-          (e) => e.id == expenseId,
-          orElse: () => const Expense(
-            id: '',
-            groupId: '',
-            description: 'Not found',
-            amountCents: 0,
-            paidByUserId: '',
-            splitUserIds: [],
-            createdAtMs: 0,
-            splitMode: SplitMode.equal,
-            customAmounts: {},
-            percentages: {},
-          ),
-        )
-      : null; // For now, focus on developer mode
+    final expense = devMode
+        ? ref
+              .watch(developerExpensesProvider(groupId))
+              .firstWhere(
+                (e) => e.id == expenseId,
+                orElse: () => const Expense(
+                  id: '',
+                  groupId: '',
+                  description: 'Not found',
+                  amountCents: 0,
+                  paidByUserId: '',
+                  splitUserIds: [],
+                  createdAtMs: 0,
+                  splitMode: SplitMode.equal,
+                  customAmounts: {},
+                  percentages: {},
+                ),
+              )
+        : null; // For now, focus on developer mode
 
     if (expense == null || expense.id.isEmpty) {
       return Scaffold(
-        appBar: AppBar(
-          title: const Text('Expense Not Found'),
-        ),
-        body: const Center(
-          child: Text('Expense not found'),
-        ),
+        appBar: AppBar(title: const Text('Expense Not Found')),
+        body: const Center(child: Text('Expense not found')),
       );
     }
 
@@ -7759,7 +8773,9 @@ class ExpenseDetailScreen extends ConsumerWidget {
                 borderRadius: BorderRadius.circular(20),
                 boxShadow: [
                   BoxShadow(
-                    color: Theme.of(context).colorScheme.primary.withOpacity(0.3),
+                    color: Theme.of(
+                      context,
+                    ).colorScheme.primary.withOpacity(0.3),
                     blurRadius: 20,
                     offset: const Offset(0, 10),
                   ),
@@ -7857,31 +8873,32 @@ class ExpenseDetailScreen extends ConsumerWidget {
                 ],
               ),
             ),
-            
+
             const SizedBox(height: 24),
-            
+
             // Paid By Section
-            _buildSection(
-              context,
-              'Paid By',
-              Icons.payment,
-              Colors.green,
-              [_buildPaidByCard(context, expense)],
-            ),
-            
+            _buildSection(context, 'Paid By', Icons.payment, Colors.green, [
+              _buildPaidByCard(context, expense),
+            ]),
+
             const SizedBox(height: 24),
-            
+
             // Participants Section
             _buildSection(
               context,
               'Participants & Split',
               Icons.people,
               Theme.of(context).colorScheme.primary,
-              expense.splitUserIds.map((userId) => _buildParticipantDetailCard(context, expense, userId)).toList(),
+              expense.splitUserIds
+                  .map(
+                    (userId) =>
+                        _buildParticipantDetailCard(context, expense, userId),
+                  )
+                  .toList(),
             ),
-            
+
             const SizedBox(height: 24),
-            
+
             // Settlement Section
             _buildSection(
               context,
@@ -7890,9 +8907,9 @@ class ExpenseDetailScreen extends ConsumerWidget {
               Colors.orange,
               [_buildSettlementSection(context, expense)],
             ),
-            
+
             const SizedBox(height: 24),
-            
+
             // Statistics Section
             _buildSection(
               context,
@@ -7901,15 +8918,16 @@ class ExpenseDetailScreen extends ConsumerWidget {
               Colors.blue,
               [_buildStatisticsCard(context, expense)],
             ),
-            
+
             const SizedBox(height: 32),
-            
+
             // Action Buttons
             Row(
               children: [
                 Expanded(
                   child: ElevatedButton.icon(
-                    onPressed: () => _showEditExpenseDialog(context, ref, expense),
+                    onPressed: () =>
+                        _showEditExpenseDialog(context, ref, expense),
                     icon: const Icon(Icons.edit),
                     label: const Text('Edit Expense'),
                     style: ElevatedButton.styleFrom(
@@ -7925,7 +8943,8 @@ class ExpenseDetailScreen extends ConsumerWidget {
                 const SizedBox(width: 16),
                 Expanded(
                   child: ElevatedButton.icon(
-                    onPressed: () => _showDeleteConfirmationDialog(context, ref, expense),
+                    onPressed: () =>
+                        _showDeleteConfirmationDialog(context, ref, expense),
                     icon: const Icon(Icons.delete),
                     label: const Text('Delete'),
                     style: ElevatedButton.styleFrom(
@@ -7945,8 +8964,14 @@ class ExpenseDetailScreen extends ConsumerWidget {
       ),
     );
   }
-  
-  Widget _buildSection(BuildContext context, String title, IconData icon, Color color, List<Widget> children) {
+
+  Widget _buildSection(
+    BuildContext context,
+    String title,
+    IconData icon,
+    Color color,
+    List<Widget> children,
+  ) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -7976,7 +9001,7 @@ class ExpenseDetailScreen extends ConsumerWidget {
       ],
     );
   }
-  
+
   Widget _buildPaidByCard(BuildContext context, Expense expense) {
     return Container(
       padding: const EdgeInsets.all(20),
@@ -8014,10 +9039,7 @@ class ExpenseDetailScreen extends ConsumerWidget {
                 ),
                 Text(
                   'Paid the full amount',
-                  style: TextStyle(
-                    color: Colors.green.shade600,
-                    fontSize: 14,
-                  ),
+                  style: TextStyle(color: Colors.green.shade600, fontSize: 14),
                 ),
               ],
             ),
@@ -8041,17 +9063,21 @@ class ExpenseDetailScreen extends ConsumerWidget {
       ),
     );
   }
-  
-  Widget _buildParticipantDetailCard(BuildContext context, Expense expense, String userId) {
+
+  Widget _buildParticipantDetailCard(
+    BuildContext context,
+    Expense expense,
+    String userId,
+  ) {
     final owedAmount = _getOwedAmount(expense, userId);
     final isPayer = userId == expense.paidByUserId;
     final netAmount = isPayer ? expense.amountCents - owedAmount : -owedAmount;
-    
+
     Color cardColor;
     Color borderColor;
     Color textColor;
     String statusText;
-    
+
     if (isPayer) {
       cardColor = Colors.green.shade50;
       borderColor = Colors.green.shade200;
@@ -8068,7 +9094,7 @@ class ExpenseDetailScreen extends ConsumerWidget {
       textColor = Colors.blue.shade800;
       statusText = 'All settled';
     }
-    
+
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
       padding: const EdgeInsets.all(16),
@@ -8139,10 +9165,10 @@ class ExpenseDetailScreen extends ConsumerWidget {
       ),
     );
   }
-  
+
   Widget _buildSettlementSection(BuildContext context, Expense expense) {
     final settlements = _calculateSettlements(expense);
-    
+
     if (settlements.isEmpty) {
       return Container(
         padding: const EdgeInsets.all(20),
@@ -8169,7 +9195,7 @@ class ExpenseDetailScreen extends ConsumerWidget {
         ),
       );
     }
-    
+
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
@@ -8189,29 +9215,35 @@ class ExpenseDetailScreen extends ConsumerWidget {
             ),
           ),
           const SizedBox(height: 12),
-          ...settlements.map((settlement) => Padding(
-            padding: const EdgeInsets.symmetric(vertical: 4),
-            child: Row(
-              children: [
-                Icon(Icons.arrow_forward, color: Colors.orange.shade600, size: 18),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    settlement,
-                    style: TextStyle(
-                      color: Colors.orange.shade800,
-                      fontSize: 14,
+          ...settlements.map(
+            (settlement) => Padding(
+              padding: const EdgeInsets.symmetric(vertical: 4),
+              child: Row(
+                children: [
+                  Icon(
+                    Icons.arrow_forward,
+                    color: Colors.orange.shade600,
+                    size: 18,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      settlement,
+                      style: TextStyle(
+                        color: Colors.orange.shade800,
+                        fontSize: 14,
+                      ),
                     ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
-          )),
+          ),
         ],
       ),
     );
   }
-  
+
   Widget _buildStatisticsCard(BuildContext context, Expense expense) {
     final avgPerPerson = expense.amountCents / expense.splitUserIds.length;
     final maxContribution = expense.splitUserIds
@@ -8220,7 +9252,7 @@ class ExpenseDetailScreen extends ConsumerWidget {
     final minContribution = expense.splitUserIds
         .map((userId) => _getOwedAmount(expense, userId))
         .fold(maxContribution, (a, b) => a < b ? a : b);
-    
+
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
@@ -8230,15 +9262,21 @@ class ExpenseDetailScreen extends ConsumerWidget {
       ),
       child: Column(
         children: [
-          _buildStatRow('Average per person', _formatCents(avgPerPerson.round())),
+          _buildStatRow(
+            'Average per person',
+            _formatCents(avgPerPerson.round()),
+          ),
           _buildStatRow('Highest contribution', _formatCents(maxContribution)),
           _buildStatRow('Lowest contribution', _formatCents(minContribution)),
-          _buildStatRow('Total participants', '${expense.splitUserIds.length} people'),
+          _buildStatRow(
+            'Total participants',
+            '${expense.splitUserIds.length} people',
+          ),
         ],
       ),
     );
   }
-  
+
   Widget _buildStatRow(String label, String value) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4),
@@ -8247,10 +9285,7 @@ class ExpenseDetailScreen extends ConsumerWidget {
         children: [
           Text(
             label,
-            style: TextStyle(
-              color: Colors.blue.shade700,
-              fontSize: 14,
-            ),
+            style: TextStyle(color: Colors.blue.shade700, fontSize: 14),
           ),
           Text(
             value,
@@ -8264,7 +9299,7 @@ class ExpenseDetailScreen extends ConsumerWidget {
       ),
     );
   }
-  
+
   String _getSplitModeText(SplitMode mode) {
     switch (mode) {
       case SplitMode.equal:
@@ -8275,7 +9310,7 @@ class ExpenseDetailScreen extends ConsumerWidget {
         return 'Percentage Split';
     }
   }
-  
+
   int _getOwedAmount(Expense expense, String userId) {
     switch (expense.splitMode) {
       case SplitMode.equal:
@@ -8287,31 +9322,37 @@ class ExpenseDetailScreen extends ConsumerWidget {
         return (expense.amountCents * percentage).round();
     }
   }
-  
+
   List<String> _calculateSettlements(Expense expense) {
     final settlements = <String>[];
     final payer = expense.paidByUserId;
-    
+
     for (final userId in expense.splitUserIds) {
       if (userId != payer) {
         final owedAmount = _getOwedAmount(expense, userId);
         if (owedAmount > 0) {
           settlements.add(
-            '${_getUserDisplayName(userId)} pays ${_formatCents(owedAmount)} to ${_getUserDisplayName(payer)}'
+            '${_getUserDisplayName(userId)} pays ${_formatCents(owedAmount)} to ${_getUserDisplayName(payer)}',
           );
         }
       }
     }
-    
+
     return settlements;
   }
-  
-  void _showDeleteConfirmationDialog(BuildContext context, WidgetRef ref, Expense expense) {
+
+  void _showDeleteConfirmationDialog(
+    BuildContext context,
+    WidgetRef ref,
+    Expense expense,
+  ) {
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('Delete Expense'),
-        content: Text('Are you sure you want to delete "${expense.description}"?'),
+        content: Text(
+          'Are you sure you want to delete "${expense.description}"?',
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(ctx).pop(),
@@ -8325,7 +9366,10 @@ class ExpenseDetailScreen extends ConsumerWidget {
                 ref.invalidate(developerExpensesProvider(expense.groupId));
               } else {
                 final repo = ref.read(firestoreRepositoryProvider);
-                await repo.removeExpense(groupId: expense.groupId, expenseId: expense.id);
+                await repo.removeExpense(
+                  groupId: expense.groupId,
+                  expenseId: expense.id,
+                );
               }
               Navigator.of(ctx).pop();
               context.pop(); // Go back to group detail
@@ -8358,18 +9402,19 @@ class _SettlementGamesDialog extends StatefulWidget {
   State<_SettlementGamesDialog> createState() => _SettlementGamesDialogState();
 }
 
-class _SettlementGamesDialogState extends State<_SettlementGamesDialog> with TickerProviderStateMixin {
+class _SettlementGamesDialogState extends State<_SettlementGamesDialog>
+    with TickerProviderStateMixin {
   late AnimationController _animationController;
   late AnimationController _cardFlipController;
   late AnimationController _diceRollController;
   late AnimationController _wheelSpinController;
   late AnimationController _confettiController;
-  
+
   late Animation<double> _cardFlipAnimation;
   late Animation<double> _diceScaleAnimation;
   late Animation<double> _wheelRotationAnimation;
   late Animation<double> _confettiAnimation;
-  
+
   String _gameResult = '';
   bool _isPlaying = false;
   bool _currentUserWins = false; // Track if current user wins for confetti
@@ -8385,39 +9430,40 @@ class _SettlementGamesDialogState extends State<_SettlementGamesDialog> with Tic
       duration: const Duration(seconds: 2),
       vsync: this,
     );
-    
+
     _cardFlipController = AnimationController(
       duration: const Duration(milliseconds: 800),
       vsync: this,
     );
-    
+
     _diceRollController = AnimationController(
       duration: const Duration(milliseconds: 1500),
       vsync: this,
     );
-    
+
     _wheelSpinController = AnimationController(
       duration: const Duration(milliseconds: 6000), // Longer for more suspense
       vsync: this,
     );
-    
+
     _confettiController = AnimationController(
       duration: const Duration(milliseconds: 2000),
       vsync: this,
     );
-    
+
     _cardFlipAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
       CurvedAnimation(parent: _cardFlipController, curve: Curves.elasticOut),
     );
-    
+
     _diceScaleAnimation = Tween<double>(begin: 0.5, end: 1.0).animate(
       CurvedAnimation(parent: _diceRollController, curve: Curves.bounceOut),
     );
-    
-    _wheelRotationAnimation = Tween<double>(begin: 0.0, end: 15.0).animate( // More rotations
+
+    _wheelRotationAnimation = Tween<double>(begin: 0.0, end: 15.0).animate(
+      // More rotations
       CurvedAnimation(parent: _wheelSpinController, curve: Curves.easeOutCubic),
     );
-    
+
     _confettiAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
       CurvedAnimation(parent: _confettiController, curve: Curves.easeOut),
     );
@@ -8512,7 +9558,7 @@ class _SettlementGamesDialogState extends State<_SettlementGamesDialog> with Tic
                     ],
                   ),
                 ),
-                
+
                 // Content - Make this scrollable
                 Flexible(
                   child: SingleChildScrollView(
@@ -8523,12 +9569,15 @@ class _SettlementGamesDialogState extends State<_SettlementGamesDialog> with Tic
                         Container(
                           padding: const EdgeInsets.all(12),
                           decoration: BoxDecoration(
-                            color: Theme.of(context).brightness == Brightness.dark
+                            color:
+                                Theme.of(context).brightness == Brightness.dark
                                 ? Colors.grey.shade800
                                 : Colors.grey.shade50,
                             borderRadius: BorderRadius.circular(12),
                             border: Border.all(
-                              color: Theme.of(context).brightness == Brightness.dark
+                              color:
+                                  Theme.of(context).brightness ==
+                                      Brightness.dark
                                   ? Colors.grey.shade600
                                   : Colors.grey.shade200,
                             ),
@@ -8542,9 +9591,13 @@ class _SettlementGamesDialogState extends State<_SettlementGamesDialog> with Tic
                                   children: [
                                     CircleAvatar(
                                       radius: 20,
-                                      backgroundColor: _getUserColor(widget.settlement.debtorId),
+                                      backgroundColor: _getUserColor(
+                                        widget.settlement.debtorId,
+                                      ),
                                       child: Text(
-                                        _getUserInitials(widget.settlement.debtorId),
+                                        _getUserInitials(
+                                          widget.settlement.debtorId,
+                                        ),
                                         style: const TextStyle(
                                           color: Colors.white,
                                           fontSize: 14,
@@ -8554,7 +9607,9 @@ class _SettlementGamesDialogState extends State<_SettlementGamesDialog> with Tic
                                     ),
                                     const SizedBox(height: 6),
                                     Text(
-                                      _getUserDisplayName(widget.settlement.debtorId),
+                                      _getUserDisplayName(
+                                        widget.settlement.debtorId,
+                                      ),
                                       style: const TextStyle(
                                         fontSize: 12,
                                         fontWeight: FontWeight.w500,
@@ -8571,7 +9626,10 @@ class _SettlementGamesDialogState extends State<_SettlementGamesDialog> with Tic
                                 child: Column(
                                   children: [
                                     Container(
-                                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 12,
+                                        vertical: 6,
+                                      ),
                                       decoration: BoxDecoration(
                                         color: const Color(0xFF7C3AED),
                                         borderRadius: BorderRadius.circular(16),
@@ -8603,9 +9661,13 @@ class _SettlementGamesDialogState extends State<_SettlementGamesDialog> with Tic
                                   children: [
                                     CircleAvatar(
                                       radius: 20,
-                                      backgroundColor: _getUserColor(widget.settlement.creditorId),
+                                      backgroundColor: _getUserColor(
+                                        widget.settlement.creditorId,
+                                      ),
                                       child: Text(
-                                        _getUserInitials(widget.settlement.creditorId),
+                                        _getUserInitials(
+                                          widget.settlement.creditorId,
+                                        ),
                                         style: const TextStyle(
                                           color: Colors.white,
                                           fontSize: 14,
@@ -8615,7 +9677,9 @@ class _SettlementGamesDialogState extends State<_SettlementGamesDialog> with Tic
                                     ),
                                     const SizedBox(height: 6),
                                     Text(
-                                      _getUserDisplayName(widget.settlement.creditorId),
+                                      _getUserDisplayName(
+                                        widget.settlement.creditorId,
+                                      ),
                                       style: const TextStyle(
                                         fontSize: 12,
                                         fontWeight: FontWeight.w500,
@@ -8631,7 +9695,7 @@ class _SettlementGamesDialogState extends State<_SettlementGamesDialog> with Tic
                           ),
                         ),
                         const SizedBox(height: 16),
-                        
+
                         // Game area - more compact
                         Container(
                           height: 160,
@@ -8651,13 +9715,11 @@ class _SettlementGamesDialogState extends State<_SettlementGamesDialog> with Tic
                               width: 1,
                             ),
                           ),
-                          child: Center(
-                            child: _buildGameAnimation(),
-                          ),
+                          child: Center(child: _buildGameAnimation()),
                         ),
-                        
+
                         const SizedBox(height: 16),
-                        
+
                         // Game results or buttons
                         if (_gameResult.isNotEmpty && !_isPlaying) ...[
                           Container(
@@ -8670,8 +9732,12 @@ class _SettlementGamesDialogState extends State<_SettlementGamesDialog> with Tic
                                         Colors.green.withOpacity(0.05),
                                       ]
                                     : [
-                                        const Color(0xFF7C3AED).withOpacity(0.1),
-                                        const Color(0xFF06B6D4).withOpacity(0.05),
+                                        const Color(
+                                          0xFF7C3AED,
+                                        ).withOpacity(0.1),
+                                        const Color(
+                                          0xFF06B6D4,
+                                        ).withOpacity(0.05),
                                       ],
                               ),
                               borderRadius: BorderRadius.circular(12),
@@ -8684,17 +9750,25 @@ class _SettlementGamesDialogState extends State<_SettlementGamesDialog> with Tic
                             child: Column(
                               children: [
                                 Icon(
-                                  _currentUserWins ? Icons.celebration : Icons.emoji_events,
+                                  _currentUserWins
+                                      ? Icons.celebration
+                                      : Icons.emoji_events,
                                   size: 28,
-                                  color: _currentUserWins ? Colors.green : const Color(0xFF7C3AED),
+                                  color: _currentUserWins
+                                      ? Colors.green
+                                      : const Color(0xFF7C3AED),
                                 ),
                                 const SizedBox(height: 8),
                                 Text(
-                                  _currentUserWins ? '🎉 You Win!' : 'Game Result',
+                                  _currentUserWins
+                                      ? '🎉 You Win!'
+                                      : 'Game Result',
                                   style: TextStyle(
                                     fontSize: 16,
                                     fontWeight: FontWeight.bold,
-                                    color: _currentUserWins ? Colors.green : const Color(0xFF7C3AED),
+                                    color: _currentUserWins
+                                        ? Colors.green
+                                        : const Color(0xFF7C3AED),
                                   ),
                                 ),
                                 const SizedBox(height: 6),
@@ -8725,9 +9799,14 @@ class _SettlementGamesDialogState extends State<_SettlementGamesDialog> with Tic
                                     _confettiController.reset();
                                   },
                                   icon: const Icon(Icons.refresh, size: 16),
-                                  label: const Text('Play Again', style: TextStyle(fontSize: 12)),
+                                  label: const Text(
+                                    'Play Again',
+                                    style: TextStyle(fontSize: 12),
+                                  ),
                                   style: OutlinedButton.styleFrom(
-                                    padding: const EdgeInsets.symmetric(vertical: 8),
+                                    padding: const EdgeInsets.symmetric(
+                                      vertical: 8,
+                                    ),
                                   ),
                                 ),
                               ),
@@ -8738,17 +9817,26 @@ class _SettlementGamesDialogState extends State<_SettlementGamesDialog> with Tic
                                     Navigator.of(context).pop();
                                     ScaffoldMessenger.of(context).showSnackBar(
                                       SnackBar(
-                                        content: Text('Game result accepted: $_gameResult'),
-                                        backgroundColor: const Color(0xFF7C3AED),
+                                        content: Text(
+                                          'Game result accepted: $_gameResult',
+                                        ),
+                                        backgroundColor: const Color(
+                                          0xFF7C3AED,
+                                        ),
                                       ),
                                     );
                                   },
                                   icon: const Icon(Icons.check, size: 16),
-                                  label: const Text('Accept', style: TextStyle(fontSize: 12)),
+                                  label: const Text(
+                                    'Accept',
+                                    style: TextStyle(fontSize: 12),
+                                  ),
                                   style: ElevatedButton.styleFrom(
                                     backgroundColor: const Color(0xFF7C3AED),
                                     foregroundColor: Colors.white,
-                                    padding: const EdgeInsets.symmetric(vertical: 8),
+                                    padding: const EdgeInsets.symmetric(
+                                      vertical: 8,
+                                    ),
                                   ),
                                 ),
                               ),
@@ -8769,11 +9857,31 @@ class _SettlementGamesDialogState extends State<_SettlementGamesDialog> with Tic
                             runSpacing: 8,
                             alignment: WrapAlignment.center,
                             children: [
-                              _gameButton('🃏 Card Draw', Icons.style, () => _playCardGame()),
-                              _gameButton('🎲 Dice Roll', Icons.casino, () => _playDiceGame()),
-                              _gameButton('🎯 Spin Wheel', Icons.track_changes, () => _playWheelGame()),
-                              _gameButton('� Coin Flip', Icons.monetization_on, () => _playCoinFlip()),
-                              _gameButton('✂️ Rock Paper Scissors', Icons.back_hand, () => _playRPSGame()),
+                              _gameButton(
+                                '🃏 Card Draw',
+                                Icons.style,
+                                () => _playCardGame(),
+                              ),
+                              _gameButton(
+                                '🎲 Dice Roll',
+                                Icons.casino,
+                                () => _playDiceGame(),
+                              ),
+                              _gameButton(
+                                '🎯 Spin Wheel',
+                                Icons.track_changes,
+                                () => _playWheelGame(),
+                              ),
+                              _gameButton(
+                                '� Coin Flip',
+                                Icons.monetization_on,
+                                () => _playCoinFlip(),
+                              ),
+                              _gameButton(
+                                '✂️ Rock Paper Scissors',
+                                Icons.back_hand,
+                                () => _playRPSGame(),
+                              ),
                             ],
                           ),
                         ],
@@ -8781,10 +9889,13 @@ class _SettlementGamesDialogState extends State<_SettlementGamesDialog> with Tic
                     ),
                   ),
                 ),
-                
+
                 // Footer - more compact
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 12,
+                  ),
                   decoration: BoxDecoration(
                     color: Theme.of(context).brightness == Brightness.dark
                         ? Colors.grey.shade800.withOpacity(0.5)
@@ -8913,7 +10024,9 @@ class _SettlementGamesDialogState extends State<_SettlementGamesDialog> with Tic
                         transform: Matrix4.identity()
                           ..setEntry(3, 2, 0.001)
                           ..rotateY(_cardFlipAnimation.value * 3.14159),
-                        child: _buildCard(_currentCard1.isEmpty ? '🂠' : _currentCard1),
+                        child: _buildCard(
+                          _currentCard1.isEmpty ? '🂠' : _currentCard1,
+                        ),
                       );
                     },
                   ),
@@ -8957,7 +10070,9 @@ class _SettlementGamesDialogState extends State<_SettlementGamesDialog> with Tic
                         transform: Matrix4.identity()
                           ..setEntry(3, 2, 0.001)
                           ..rotateY(_cardFlipAnimation.value * 3.14159),
-                        child: _buildCard(_currentCard2.isEmpty ? '🂠' : _currentCard2),
+                        child: _buildCard(
+                          _currentCard2.isEmpty ? '🂠' : _currentCard2,
+                        ),
                       );
                     },
                   ),
@@ -9042,7 +10157,10 @@ class _SettlementGamesDialogState extends State<_SettlementGamesDialog> with Tic
               ),
               const SizedBox(width: 30),
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 6,
+                ),
                 decoration: BoxDecoration(
                   color: const Color(0xFF7C3AED),
                   borderRadius: BorderRadius.circular(20),
@@ -9156,8 +10274,12 @@ class _SettlementGamesDialogState extends State<_SettlementGamesDialog> with Tic
                       ),
                       child: CustomPaint(
                         painter: WheelPainter(
-                          debtorName: _getUserDisplayName(widget.settlement.debtorId),
-                          creditorName: _getUserDisplayName(widget.settlement.creditorId),
+                          debtorName: _getUserDisplayName(
+                            widget.settlement.debtorId,
+                          ),
+                          creditorName: _getUserDisplayName(
+                            widget.settlement.creditorId,
+                          ),
                         ),
                       ),
                     ),
@@ -9231,8 +10353,12 @@ class _SettlementGamesDialogState extends State<_SettlementGamesDialog> with Tic
                       ),
                       child: CustomPaint(
                         painter: WheelPainter(
-                          debtorName: _getUserDisplayName(widget.settlement.debtorId),
-                          creditorName: _getUserDisplayName(widget.settlement.creditorId),
+                          debtorName: _getUserDisplayName(
+                            widget.settlement.debtorId,
+                          ),
+                          creditorName: _getUserDisplayName(
+                            widget.settlement.creditorId,
+                          ),
                         ),
                       ),
                     ),
@@ -9269,7 +10395,9 @@ class _SettlementGamesDialogState extends State<_SettlementGamesDialog> with Tic
             style: TextStyle(
               fontSize: 16,
               fontWeight: FontWeight.bold,
-              color: _currentUserWins ? Colors.green.shade600 : Colors.red.shade600,
+              color: _currentUserWins
+                  ? Colors.green.shade600
+                  : Colors.red.shade600,
             ),
             textAlign: TextAlign.center,
           ),
@@ -9277,7 +10405,9 @@ class _SettlementGamesDialogState extends State<_SettlementGamesDialog> with Tic
       );
     }
 
-    if (_gameResult.contains('Flipping coin') || _gameResult.contains('Heads') || _gameResult.contains('Tails')) {
+    if (_gameResult.contains('Flipping coin') ||
+        _gameResult.contains('Heads') ||
+        _gameResult.contains('Tails')) {
       return Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
@@ -9307,11 +10437,17 @@ class _SettlementGamesDialogState extends State<_SettlementGamesDialog> with Tic
               Column(
                 children: [
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 4,
+                    ),
                     decoration: BoxDecoration(
                       color: const Color(0xFFFFD700).withOpacity(0.2),
                       borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: const Color(0xFFFFD700), width: 1),
+                      border: Border.all(
+                        color: const Color(0xFFFFD700),
+                        width: 1,
+                      ),
                     ),
                     child: Text(
                       _getUserDisplayName(widget.settlement.creditorId),
@@ -9338,9 +10474,12 @@ class _SettlementGamesDialogState extends State<_SettlementGamesDialog> with Tic
                 duration: const Duration(milliseconds: 1500),
                 tween: Tween(begin: 0, end: _isPlaying ? 12 : 0),
                 builder: (context, value, child) {
-                  final rotationY = value * 3.14159; // Y-axis rotation for flip effect
-                  final bounce = _isPlaying ? (sin(value * 2) * 10).abs().toDouble() : 0.0;
-                  
+                  final rotationY =
+                      value * 3.14159; // Y-axis rotation for flip effect
+                  final bounce = _isPlaying
+                      ? (sin(value * 2) * 10).abs().toDouble()
+                      : 0.0;
+
                   return Transform.translate(
                     offset: Offset(0, -bounce),
                     child: Transform(
@@ -9363,7 +10502,10 @@ class _SettlementGamesDialogState extends State<_SettlementGamesDialog> with Tic
                             begin: Alignment.topLeft,
                             end: Alignment.bottomRight,
                           ),
-                          border: Border.all(color: const Color(0xFF8B7355), width: 2),
+                          border: Border.all(
+                            color: const Color(0xFF8B7355),
+                            width: 2,
+                          ),
                           boxShadow: [
                             BoxShadow(
                               color: Colors.black.withOpacity(0.3),
@@ -9392,11 +10534,17 @@ class _SettlementGamesDialogState extends State<_SettlementGamesDialog> with Tic
               Column(
                 children: [
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 4,
+                    ),
                     decoration: BoxDecoration(
                       color: const Color(0xFF8B7355).withOpacity(0.2),
                       borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: const Color(0xFF8B7355), width: 1),
+                      border: Border.all(
+                        color: const Color(0xFF8B7355),
+                        width: 1,
+                      ),
                     ),
                     child: Text(
                       _getUserDisplayName(widget.settlement.debtorId),
@@ -9460,7 +10608,10 @@ class _SettlementGamesDialogState extends State<_SettlementGamesDialog> with Tic
                       decoration: BoxDecoration(
                         color: Colors.white,
                         borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: const Color(0xFF7C3AED), width: 2),
+                        border: Border.all(
+                          color: const Color(0xFF7C3AED),
+                          width: 2,
+                        ),
                       ),
                       child: Text('✊', style: TextStyle(fontSize: 36)),
                     ),
@@ -9470,7 +10621,10 @@ class _SettlementGamesDialogState extends State<_SettlementGamesDialog> with Tic
                       decoration: BoxDecoration(
                         color: Colors.white,
                         borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: const Color(0xFF7C3AED), width: 2),
+                        border: Border.all(
+                          color: const Color(0xFF7C3AED),
+                          width: 2,
+                        ),
                       ),
                       child: Text('✋', style: TextStyle(fontSize: 36)),
                     ),
@@ -9480,7 +10634,10 @@ class _SettlementGamesDialogState extends State<_SettlementGamesDialog> with Tic
                       decoration: BoxDecoration(
                         color: Colors.white,
                         borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: const Color(0xFF7C3AED), width: 2),
+                        border: Border.all(
+                          color: const Color(0xFF7C3AED),
+                          width: 2,
+                        ),
                       ),
                       child: Text('✌️', style: TextStyle(fontSize: 36)),
                     ),
@@ -9494,10 +10651,11 @@ class _SettlementGamesDialogState extends State<_SettlementGamesDialog> with Tic
     }
 
     // Show final result state after game completion
-    if (_gameResult.isNotEmpty && !_isPlaying && 
-        !_gameResult.contains('Drawing') && 
-        !_gameResult.contains('Rolling') && 
-        !_gameResult.contains('Spinning') && 
+    if (_gameResult.isNotEmpty &&
+        !_isPlaying &&
+        !_gameResult.contains('Drawing') &&
+        !_gameResult.contains('Rolling') &&
+        !_gameResult.contains('Spinning') &&
         !_gameResult.contains('Rock...')) {
       return Column(
         mainAxisAlignment: MainAxisAlignment.center,
@@ -9533,10 +10691,7 @@ class _SettlementGamesDialogState extends State<_SettlementGamesDialog> with Tic
                 const SizedBox(height: 8),
                 Text(
                   'The decision has been made.',
-                  style: TextStyle(
-                    fontSize: 14,
-                    color: Colors.grey.shade600,
-                  ),
+                  style: TextStyle(fontSize: 14, color: Colors.grey.shade600),
                 ),
               ],
             ),
@@ -9564,17 +10719,12 @@ class _SettlementGamesDialogState extends State<_SettlementGamesDialog> with Tic
           ),
         ],
       ),
-      child: Center(
-        child: Text(
-          card,
-          style: const TextStyle(fontSize: 16),
-        ),
-      ),
+      child: Center(child: Text(card, style: const TextStyle(fontSize: 16))),
     );
   }
 
   Widget _gameButton(String label, IconData icon, VoidCallback onPressed) {
-    return Container(
+    return SizedBox(
       width: 110,
       height: 50,
       child: ElevatedButton(
@@ -9588,7 +10738,9 @@ class _SettlementGamesDialogState extends State<_SettlementGamesDialog> with Tic
             color: const Color(0xFF7C3AED).withOpacity(0.3),
             width: 1,
           ),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(10),
+          ),
           elevation: 0,
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
         ),
@@ -9640,34 +10792,37 @@ class _SettlementGamesDialogState extends State<_SettlementGamesDialog> with Tic
     final random = Random();
     final debtorCard = random.nextInt(13) + 1; // 1-13 (Ace to King)
     final creditorCard = random.nextInt(13) + 1;
-    
+
     final debtorCardName = _getCardName(debtorCard);
     final creditorCardName = _getCardName(creditorCard);
-    
+
     // Show the final cards
     setState(() {
       _currentCard1 = _getCardEmoji(debtorCard);
       _currentCard2 = _getCardEmoji(creditorCard);
     });
-    
+
     await Future.delayed(const Duration(milliseconds: 800));
-    
+
     String winner;
     final debtorName = _getUserDisplayName(widget.settlement.debtorId);
     final creditorName = _getUserDisplayName(widget.settlement.creditorId);
     const currentUserId = 'dev_user_123'; // In real app, get from auth
     bool currentUserWins = false;
-    
+
     if (debtorCard > creditorCard) {
-      winner = '$creditorName pays! ($creditorName: $creditorCardName vs $debtorName: $debtorCardName)';
+      winner =
+          '$creditorName pays! ($creditorName: $creditorCardName vs $debtorName: $debtorCardName)';
       // Current user wins if they are the debtor (owed money) and the creditor has to pay
       currentUserWins = (widget.settlement.debtorId == currentUserId);
     } else if (creditorCard > debtorCard) {
-      winner = '$debtorName pays! ($debtorName: $debtorCardName vs $creditorName: $creditorCardName)';
+      winner =
+          '$debtorName pays! ($debtorName: $debtorCardName vs $creditorName: $creditorCardName)';
       // Current user wins if they are the creditor (owed money) and the debtor has to pay
       currentUserWins = (widget.settlement.creditorId == currentUserId);
     } else {
-      winner = 'It\'s a tie! Both drew $debtorCardName. Draw again or split the cost!';
+      winner =
+          'It\'s a tie! Both drew $debtorCardName. Draw again or split the cost!';
       currentUserWins = false;
     }
 
@@ -9676,7 +10831,7 @@ class _SettlementGamesDialogState extends State<_SettlementGamesDialog> with Tic
       _isPlaying = false;
       _currentUserWins = currentUserWins;
     });
-    
+
     if (currentUserWins) {
       _confettiController.forward();
     }
@@ -9702,27 +10857,29 @@ class _SettlementGamesDialogState extends State<_SettlementGamesDialog> with Tic
     final random = Random();
     final isHeads = random.nextBool();
     const currentUserId = 'dev_user_123'; // In real app, get from auth
-    
+
     // Current user calls heads, other person calls tails
     // If heads wins, current user wins if they're the creditor (gets paid)
     // If tails wins, current user wins if they're the debtor (doesn't have to pay)
     bool currentUserWins = false;
     String result;
-    
+
     if (isHeads) {
-      result = 'Heads! ${_getUserDisplayName(widget.settlement.creditorId)} wins and gets paid!';
+      result =
+          'Heads! ${_getUserDisplayName(widget.settlement.creditorId)} wins and gets paid!';
       currentUserWins = (widget.settlement.creditorId == currentUserId);
     } else {
-      result = 'Tails! ${_getUserDisplayName(widget.settlement.debtorId)} wins and doesn\'t have to pay!';
+      result =
+          'Tails! ${_getUserDisplayName(widget.settlement.debtorId)} wins and doesn\'t have to pay!';
       currentUserWins = (widget.settlement.debtorId == currentUserId);
     }
-    
+
     setState(() {
       _gameResult = result;
       _isPlaying = false;
       _currentUserWins = currentUserWins;
     });
-    
+
     if (currentUserWins) {
       _confettiController.forward();
     }
@@ -9756,26 +10913,28 @@ class _SettlementGamesDialogState extends State<_SettlementGamesDialog> with Tic
 
     final debtorRoll = random.nextInt(6) + 1;
     final creditorRoll = random.nextInt(6) + 1;
-    
+
     setState(() {
       _currentDice1 = _getDiceEmoji(debtorRoll);
       _currentDice2 = _getDiceEmoji(creditorRoll);
     });
-    
+
     await Future.delayed(const Duration(milliseconds: 800));
-    
+
     String winner;
     final debtorName = _getUserDisplayName(widget.settlement.debtorId);
     final creditorName = _getUserDisplayName(widget.settlement.creditorId);
     const currentUserId = 'dev_user_123'; // In real app, get from auth
     bool currentUserWins = false;
-    
+
     if (debtorRoll < creditorRoll) {
-      winner = '$debtorName pays! ($debtorName rolled $debtorRoll vs $creditorName rolled $creditorRoll)';
+      winner =
+          '$debtorName pays! ($debtorName rolled $debtorRoll vs $creditorName rolled $creditorRoll)';
       // Debtor pays - current user wins if they are the creditor
       currentUserWins = (widget.settlement.creditorId == currentUserId);
     } else if (creditorRoll < debtorRoll) {
-      winner = '$creditorName pays! ($creditorName rolled $creditorRoll vs $debtorName rolled $debtorRoll)';
+      winner =
+          '$creditorName pays! ($creditorName rolled $creditorRoll vs $debtorName rolled $debtorRoll)';
       // Creditor pays - current user wins if they are the debtor
       currentUserWins = (widget.settlement.debtorId == currentUserId);
     } else {
@@ -9788,7 +10947,7 @@ class _SettlementGamesDialogState extends State<_SettlementGamesDialog> with Tic
       _isPlaying = false;
       _currentUserWins = currentUserWins;
     });
-    
+
     if (currentUserWins) {
       _confettiController.forward();
     }
@@ -9803,10 +10962,12 @@ class _SettlementGamesDialogState extends State<_SettlementGamesDialog> with Tic
 
     // Determine result first so we can animate to the correct position
     final random = Random();
-    final payingPerson = random.nextBool() ? widget.settlement.debtorId : widget.settlement.creditorId;
+    final payingPerson = random.nextBool()
+        ? widget.settlement.debtorId
+        : widget.settlement.creditorId;
     final payingName = _getUserDisplayName(payingPerson);
     const currentUserId = 'dev_user_123'; // In real app, get from auth
-    
+
     // Determine if current user wins
     bool currentUserWins = false;
     if (payingPerson == widget.settlement.debtorId) {
@@ -9824,35 +10985,40 @@ class _SettlementGamesDialogState extends State<_SettlementGamesDialog> with Tic
       // Point to top half (creditor) - random position in upper semicircle
       finalRotation = (random.nextDouble() * 3.14159); // 0 to π radians
     } else {
-      // Point to bottom half (debtor) - random position in lower semicircle  
-      finalRotation = (3.14159 + random.nextDouble() * 3.14159); // π to 2π radians
+      // Point to bottom half (debtor) - random position in lower semicircle
+      finalRotation =
+          (3.14159 + random.nextDouble() * 3.14159); // π to 2π radians
     }
-    
+
     // Add multiple full rotations for spinning effect
     finalRotation += 15 * 2 * 3.14159; // 15 full rotations plus final position
 
     // Start wheel spin animation to calculated final position
     _wheelSpinController.reset();
-    _wheelRotationAnimation = Tween<double>(
-      begin: 0.0, 
-      end: finalRotation / (2 * 3.14159), // Convert to rotations
-    ).animate(
-      CurvedAnimation(parent: _wheelSpinController, curve: Curves.easeOutCubic),
-    );
+    _wheelRotationAnimation =
+        Tween<double>(
+          begin: 0.0,
+          end: finalRotation / (2 * 3.14159), // Convert to rotations
+        ).animate(
+          CurvedAnimation(
+            parent: _wheelSpinController,
+            curve: Curves.easeOutCubic,
+          ),
+        );
     _wheelSpinController.forward();
 
     // Wait for the animation to complete
     await Future.delayed(const Duration(milliseconds: 5500));
-    
+
     // Short pause before revealing result
     await Future.delayed(const Duration(milliseconds: 500));
-    
+
     setState(() {
       _gameResult = 'The wheel chooses $payingName to pay!';
       _isPlaying = false;
       _currentUserWins = currentUserWins;
     });
-    
+
     if (currentUserWins) {
       _confettiController.forward();
     }
@@ -9879,25 +11045,27 @@ class _SettlementGamesDialogState extends State<_SettlementGamesDialog> with Tic
     final choices = ['Rock', 'Paper', 'Scissors'];
     final debtorChoice = choices[random.nextInt(3)];
     final creditorChoice = choices[random.nextInt(3)];
-    
+
     final debtorName = _getUserDisplayName(widget.settlement.debtorId);
     final creditorName = _getUserDisplayName(widget.settlement.creditorId);
     const currentUserId = 'dev_user_123'; // In real app, get from auth
-    
+
     String winner;
     bool currentUserWins = false;
-    
+
     if ((debtorChoice == 'Rock' && creditorChoice == 'Scissors') ||
         (debtorChoice == 'Paper' && creditorChoice == 'Rock') ||
         (debtorChoice == 'Scissors' && creditorChoice == 'Paper')) {
-      winner = '$creditorName pays! ($debtorName: $debtorChoice beats $creditorName: $creditorChoice)';
+      winner =
+          '$creditorName pays! ($debtorName: $debtorChoice beats $creditorName: $creditorChoice)';
       // Creditor pays - current user wins if they are the debtor
       currentUserWins = (widget.settlement.debtorId == currentUserId);
     } else if (debtorChoice == creditorChoice) {
       winner = 'Tie! Both chose $debtorChoice. Play again!';
       currentUserWins = false;
     } else {
-      winner = '$debtorName pays! ($creditorName: $creditorChoice beats $debtorName: $debtorChoice)';
+      winner =
+          '$debtorName pays! ($creditorName: $creditorChoice beats $debtorName: $debtorChoice)';
       // Debtor pays - current user wins if they are the creditor
       currentUserWins = (widget.settlement.creditorId == currentUserId);
     }
@@ -9907,7 +11075,7 @@ class _SettlementGamesDialogState extends State<_SettlementGamesDialog> with Tic
       _isPlaying = false;
       _currentUserWins = currentUserWins;
     });
-    
+
     if (currentUserWins) {
       _confettiController.forward();
     }
@@ -9915,61 +11083,102 @@ class _SettlementGamesDialogState extends State<_SettlementGamesDialog> with Tic
 
   String _getCardName(int cardValue) {
     switch (cardValue) {
-      case 1: return 'Ace';
-      case 11: return 'Jack';
-      case 12: return 'Queen';
-      case 13: return 'King';
-      default: return cardValue.toString();
+      case 1:
+        return 'Ace';
+      case 11:
+        return 'Jack';
+      case 12:
+        return 'Queen';
+      case 13:
+        return 'King';
+      default:
+        return cardValue.toString();
     }
   }
-  
+
   String _getCardEmoji(int cardValue) {
     switch (cardValue) {
-      case 1: return 'A♠';
-      case 2: return '2♠';
-      case 3: return '3♠';
-      case 4: return '4♠';
-      case 5: return '5♠';
-      case 6: return '6♠';
-      case 7: return '7♠';
-      case 8: return '8♠';
-      case 9: return '9♠';
-      case 10: return '10♠';
-      case 11: return 'J♠';
-      case 12: return 'Q♠';
-      case 13: return 'K♠';
-      default: return '🂠';
+      case 1:
+        return 'A♠';
+      case 2:
+        return '2♠';
+      case 3:
+        return '3♠';
+      case 4:
+        return '4♠';
+      case 5:
+        return '5♠';
+      case 6:
+        return '6♠';
+      case 7:
+        return '7♠';
+      case 8:
+        return '8♠';
+      case 9:
+        return '9♠';
+      case 10:
+        return '10♠';
+      case 11:
+        return 'J♠';
+      case 12:
+        return 'Q♠';
+      case 13:
+        return 'K♠';
+      default:
+        return '🂠';
     }
   }
-  
+
   String _getDiceEmoji(int value) {
     switch (value) {
-      case 1: return '⚀';
-      case 2: return '⚁';
-      case 3: return '⚂';
-      case 4: return '⚃';
-      case 5: return '⚄';
-      case 6: return '⚅';
-      default: return '⚀';
+      case 1:
+        return '⚀';
+      case 2:
+        return '⚁';
+      case 3:
+        return '⚂';
+      case 4:
+        return '⚃';
+      case 5:
+        return '⚄';
+      case 6:
+        return '⚅';
+      default:
+        return '⚀';
     }
   }
 
   // Helper methods for user display
   String _getUserDisplayName(String userId) {
     switch (userId) {
-      case 'dev_user_123': return 'You';
-      case 'user_alice': return 'Alice Johnson';
-      case 'user_bob': return 'Bob Smith';
-      case 'user_charlie': return 'Charlie Brown';
-      case 'user_david': return 'David Wilson';
-      case 'user_eve': return 'Eve Davis';
-      case 'user_frank': return 'Frank Miller';
-      case 'user_grace': return 'Grace Chen';
+      case 'dev_user_123':
+        return 'You';
+      case 'user_alice':
+        return 'Alice Johnson';
+      case 'user_bob':
+        return 'Bob Smith';
+      case 'user_charlie':
+        return 'Charlie Brown';
+      case 'user_david':
+        return 'David Wilson';
+      case 'user_eve':
+        return 'Eve Davis';
+      case 'user_frank':
+        return 'Frank Miller';
+      case 'user_grace':
+        return 'Grace Chen';
       default:
         // For phone/email based users, extract name from ID
         if (userId.contains('@')) {
-          return userId.split('@')[0].replaceAll('.', ' ').split(' ')
-              .map((word) => word.isNotEmpty ? '${word[0].toUpperCase()}${word.substring(1)}' : '')
+          return userId
+              .split('@')[0]
+              .replaceAll('.', ' ')
+              .split(' ')
+              .map(
+                (word) => word.isNotEmpty
+                    ? '${word[0].toUpperCase()}${word.substring(1)}'
+                    : '',
+              )
               .join(' ');
         } else if (userId.startsWith('+')) {
           return 'Contact ${userId.substring(userId.length - 4)}';
@@ -9994,7 +11203,7 @@ class _SettlementGamesDialogState extends State<_SettlementGamesDialog> with Tic
 
   String _getUserInitials(String userId) {
     final displayName = _getUserDisplayName(userId);
-    
+
     // Split into words and take first letter of each
     final words = displayName.split(' ');
     if (words.length >= 2) {
@@ -10030,7 +11239,7 @@ class WheelPainter extends CustomPainter {
     final paint1 = Paint()
       ..color = const Color(0xFF7C3AED)
       ..style = PaintingStyle.fill;
-    
+
     final paint2 = Paint()
       ..color = const Color(0xFF06B6D4)
       ..style = PaintingStyle.fill;
@@ -10080,7 +11289,10 @@ class WheelPainter extends CustomPainter {
     creditorTextPainter.layout();
     creditorTextPainter.paint(
       canvas,
-      Offset(center.dx - creditorTextPainter.width / 2, center.dy - radius / 2 - creditorTextPainter.height / 2),
+      Offset(
+        center.dx - creditorTextPainter.width / 2,
+        center.dy - radius / 2 - creditorTextPainter.height / 2,
+      ),
     );
 
     // Draw text for debtor (bottom half)
@@ -10098,7 +11310,10 @@ class WheelPainter extends CustomPainter {
     debtorTextPainter.layout();
     debtorTextPainter.paint(
       canvas,
-      Offset(center.dx - debtorTextPainter.width / 2, center.dy + radius / 2 - debtorTextPainter.height / 2),
+      Offset(
+        center.dx - debtorTextPainter.width / 2,
+        center.dy + radius / 2 - debtorTextPainter.height / 2,
+      ),
     );
   }
 
@@ -10110,19 +11325,19 @@ class WheelPainter extends CustomPainter {
 
 class ConfettiPainter extends CustomPainter {
   final double animationValue;
-  
+
   ConfettiPainter(this.animationValue);
-  
+
   @override
   void paint(Canvas canvas, Size size) {
     final paint = Paint();
     final random = Random(42); // Fixed seed for consistent animation
-    
+
     for (int i = 0; i < 50; i++) {
       final x = random.nextDouble() * size.width;
       final y = random.nextDouble() * size.height;
       final fallY = y + (animationValue * 100);
-      
+
       paint.color = [
         Colors.red,
         Colors.blue,
@@ -10131,24 +11346,20 @@ class ConfettiPainter extends CustomPainter {
         Colors.purple,
         Colors.orange,
       ][random.nextInt(6)];
-      
+
       canvas.save();
       canvas.translate(x, fallY % (size.height + 50));
       canvas.rotate(animationValue * 2 * 3.14159 * (random.nextDouble() - 0.5));
-      
+
       // Draw confetti piece
-      canvas.drawRect(
-        const Rect.fromLTWH(-3, -3, 6, 6),
-        paint,
-      );
-      
+      canvas.drawRect(const Rect.fromLTWH(-3, -3, 6, 6), paint);
+
       canvas.restore();
     }
   }
-  
+
   @override
   bool shouldRepaint(ConfettiPainter oldDelegate) {
     return oldDelegate.animationValue != animationValue;
   }
 }
-

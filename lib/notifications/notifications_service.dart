@@ -28,7 +28,6 @@ class NotificationsService {
     }
 
     String? token = await _messaging.getToken();
-    if (token == null) return;
 
     final fb.User? user = fb.FirebaseAuth.instance.currentUser;
     if (user == null) return;
@@ -38,8 +37,8 @@ class NotificationsService {
         token: {
           'platform': Platform.operatingSystem,
           'updatedAtMs': DateTime.now().millisecondsSinceEpoch,
-        }
-      }
+        },
+      },
     }, SetOptions(merge: true));
 
     // Listen for token refresh
@@ -49,17 +48,17 @@ class NotificationsService {
           newToken: {
             'platform': Platform.operatingSystem,
             'updatedAtMs': DateTime.now().millisecondsSinceEpoch,
-          }
-        }
+          },
+        },
       }, SetOptions(merge: true));
     });
   }
 }
 
-final Provider<NotificationsService> notificationsServiceProvider = Provider<NotificationsService>((ref) {
-  return NotificationsService(FirebaseMessaging.instance, FirebaseFirestore.instance);
-});
-
-
-
-
+final Provider<NotificationsService> notificationsServiceProvider =
+    Provider<NotificationsService>((ref) {
+      return NotificationsService(
+        FirebaseMessaging.instance,
+        FirebaseFirestore.instance,
+      );
+    });

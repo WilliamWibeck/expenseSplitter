@@ -1,30 +1,39 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:riverpod/riverpod.dart';
-import '../models/group.dart';
+
 import '../models/expense.dart';
+import '../models/group.dart';
 import '../models/settlement.dart';
 
 class FirestoreRepository {
   FirestoreRepository(this._db);
   final FirebaseFirestore _db;
-  
+
   // Local cache for groups to handle connection issues
   static List<Group> _cachedGroups = [];
   static String? _cachedUserId;
 
   // Groups
   Stream<Group> watchGroup(String groupId) {
-    return _db.collection('groups').doc(groupId).snapshots().map((d) => Group.fromDoc(d.id, d.data() ?? {}));
+    return _db
+        .collection('groups')
+        .doc(groupId)
+        .snapshots()
+        .map((d) => Group.fromDoc(d.id, d.data() ?? {}));
   }
+
   Stream<List<Group>> watchGroups(String userId) {
     print('Setting up groups stream for user: $userId');
     return _db
         .collection('groups')
         .where('memberUserIds', arrayContains: userId)
         .orderBy('createdAtMs', descending: true)
+        .limit(20)
         .snapshots()
         .map((snap) {
-          final groups = snap.docs.map((d) => Group.fromDoc(d.id, d.data())).toList();
+          final groups = snap.docs
+              .map((d) => Group.fromDoc(d.id, d.data()))
+              .toList();
           print('Groups stream updated: ${groups.length} groups found');
           if (groups.isNotEmpty) {
             print('Group names: ${groups.map((g) => g.name).join(', ')}');
@@ -38,14 +47,19 @@ class FirestoreRepository {
           print('Groups stream error: $error');
           // Return cached groups if available for this user
           if (_cachedUserId == userId && _cachedGroups.isNotEmpty) {
-            print('Returning ${_cachedGroups.length} cached groups due to connection error');
+            print(
+              'Returning ${_cachedGroups.length} cached groups due to connection error',
+            );
             return _cachedGroups;
           }
           return <Group>[];
         });
   }
 
-  Future<String> createGroup({required String name, required List<String> memberUserIds}) async {
+  Future<String> createGroup({
+    required String name,
+    required List<String> memberUserIds,
+  }) async {
     final shareCode = _generateShareCode();
     final currentTime = DateTime.now().millisecondsSinceEpoch;
     final doc = await _db.collection('groups').add({
@@ -54,7 +68,7 @@ class FirestoreRepository {
       'createdAtMs': currentTime,
       'shareCode': shareCode,
     });
-    
+
     // Add to cache immediately for better UX
     final newGroup = Group(
       id: doc.id,
@@ -63,17 +77,21 @@ class FirestoreRepository {
       createdAtMs: currentTime,
       shareCode: shareCode,
     );
-    
+
     // Update cache if it's for the same user
     if (memberUserIds.length == 1 && _cachedUserId == memberUserIds.first) {
       _cachedGroups = [newGroup, ..._cachedGroups];
       print('Added new group to cache: $name');
     }
-    
+
     return doc.id;
   }
 
-  Future<void> updateGroup({required String groupId, String? name, List<String>? memberUserIds}) async {
+  Future<void> updateGroup({
+    required String groupId,
+    String? name,
+    List<String>? memberUserIds,
+  }) async {
     final Map<String, Object?> data = {};
     if (name != null) data['name'] = name;
     if (memberUserIds != null) data['memberUserIds'] = memberUserIds;
@@ -92,8 +110,12 @@ class FirestoreRepository {
         .doc(groupId)
         .collection('expenses')
         .orderBy('createdAtMs', descending: true)
+        .limit(20)
         .snapshots()
-        .map((snap) => snap.docs.map((d) => Expense.fromDoc(d.id, d.data())).toList());
+        .map(
+          (snap) =>
+              snap.docs.map((d) => Expense.fromDoc(d.id, d.data())).toList(),
+        );
   }
 
   Future<String> addExpense(Expense expense) async {
@@ -114,12 +136,27 @@ class FirestoreRepository {
         .update(expense.toJson());
   }
 
-  Future<void> removeExpense({required String groupId, required String expenseId}) async {
-    await _db.collection('groups').doc(groupId).collection('expenses').doc(expenseId).delete();
+  Future<void> removeExpense({
+    required String groupId,
+    required String expenseId,
+  }) async {
+    await _db
+        .collection('groups')
+        .doc(groupId)
+        .collection('expenses')
+        .doc(expenseId)
+        .delete();
   }
 
-  Future<String?> joinGroupByCode({required String shareCode, required String userId}) async {
-    final query = await _db.collection('groups').where('shareCode', isEqualTo: shareCode).limit(1).get();
+  Future<String?> joinGroupByCode({
+    required String shareCode,
+    required String userId,
+  }) async {
+    final query = await _db
+        .collection('groups')
+        .where('shareCode', isEqualTo: shareCode)
+        .limit(1)
+        .get();
     if (query.docs.isEmpty) return null;
     final groupDoc = query.docs.first;
     final groupId = groupDoc.id;
@@ -127,12 +164,14 @@ class FirestoreRepository {
     final currentMembers = List<String>.from(group['memberUserIds'] ?? []);
     if (currentMembers.contains(userId)) return groupId; // already a member
     currentMembers.add(userId);
-    await _db.collection('groups').doc(groupId).update({'memberUserIds': currentMembers});
+    await _db.collection('groups').doc(groupId).update({
+      'memberUserIds': currentMembers,
+    });
     return groupId;
   }
 
   String _generateShareCode() {
-    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    // Removed unused variable 'chars'
     final random = DateTime.now().millisecondsSinceEpoch % 1000000;
     return random.toString().padLeft(6, '0');
   }
@@ -154,9 +193,11 @@ class FirestoreRepository {
         .collection('settlements')
         .orderBy('createdAtMs', descending: true)
         .snapshots()
-        .map((snap) => snap.docs
-            .map((d) => GroupSettlement.fromDoc(d.id, d.data()))
-            .toList());
+        .map(
+          (snap) => snap.docs
+              .map((d) => GroupSettlement.fromDoc(d.id, d.data()))
+              .toList(),
+        );
   }
 
   Future<void> updateSettlementPayment({
@@ -177,13 +218,13 @@ class FirestoreRepository {
 
       final data = settlementDoc.data()!;
       final paymentsData = List<dynamic>.from(data['payments'] ?? []);
-      
+
       if (paymentIndex < paymentsData.length) {
         paymentsData[paymentIndex] = payment.toJson();
-        
+
         // Check if all payments are complete
         final allComplete = paymentsData.every((p) => p['isCompleted'] == true);
-        
+
         transaction.update(settlementRef, {
           'payments': paymentsData,
           if (allComplete && data['completedAtMs'] == null)
@@ -206,8 +247,7 @@ class FirestoreRepository {
   }
 }
 
-final Provider<FirestoreRepository> firestoreRepositoryProvider = Provider<FirestoreRepository>((ref) {
-  return FirestoreRepository(FirebaseFirestore.instance);
-});
-
-
+final Provider<FirestoreRepository> firestoreRepositoryProvider =
+    Provider<FirestoreRepository>((ref) {
+      return FirestoreRepository(FirebaseFirestore.instance);
+    });

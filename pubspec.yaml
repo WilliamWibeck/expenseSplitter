@@ -53,6 +53,8 @@ dependencies:
   cloud_functions: ^6.0.1
   shared_preferences: ^2.2.3
   http: ^1.1.0
+  qr_bar_code: ^3.0.0
+  qr_flutter: ^4.1.0
 
 dev_dependencies:
   flutter_test:
