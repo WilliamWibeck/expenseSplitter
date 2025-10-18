@@ -1,17 +1,17 @@
+import 'package:flutter/foundation.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
 
 import 'package:firebase_auth/firebase_auth.dart' as fb;
-import 'package:firebase_auth/firebase_auth.dart' show User;
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_riverpod/legacy.dart';
 import 'package:go_router/go_router.dart';
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
 import 'package:http/http.dart' as http;
-// Developer mode data providers
 import 'package:image_picker/image_picker.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -29,6 +29,164 @@ import 'notifications/notifications_service.dart';
 import 'screens/user_profile_screen.dart';
 import 'screens/user_search_screen.dart';
 import 'services/swish_return_detector.dart';
+// All imports must be at the very top
+
+// Developer mode provider (bool)
+class DeveloperModeNotifier extends Notifier<bool> {
+  @override
+  bool build() => false;
+
+  void setDeveloperMode(bool value) {
+    state = value;
+  }
+}
+
+final developerModeProvider = NotifierProvider<DeveloperModeNotifier, bool>(
+  DeveloperModeNotifier.new,
+);
+
+// Theme mode provider
+final themeNotifierProvider = NotifierProvider<ThemeNotifier, ThemeMode>(
+  ThemeNotifier.new,
+);
+
+// Developer groups notifier
+class DeveloperGroupsNotifier extends Notifier<List<Group>> {
+  @override
+  List<Group> build() => [
+    Group(
+      id: 'dev_group_1',
+      name: 'Friends Trip',
+      memberUserIds: ['dev_user_123', 'dev_user_456', 'dev_user_789'],
+      createdAtMs: DateTime.now().millisecondsSinceEpoch - 1000000,
+      shareCode: '123456',
+    ),
+    Group(
+      id: 'dev_group_2',
+      name: 'Roommates',
+      memberUserIds: ['dev_user_123', 'dev_user_456'],
+      createdAtMs: DateTime.now().millisecondsSinceEpoch - 2000000,
+      shareCode: '654321',
+    ),
+    Group(
+      id: 'dev_group_3',
+      name: 'Family Dinner',
+      memberUserIds: ['dev_user_123', 'dev_user_999', 'dev_user_888', 'dev_user_777'],
+      createdAtMs: DateTime.now().millisecondsSinceEpoch - 3000000,
+      shareCode: '111222',
+    ),
+    Group(
+      id: 'dev_group_4',
+      name: 'Project Team',
+      memberUserIds: ['dev_user_123', 'dev_user_456', 'dev_user_321', 'dev_user_654', 'dev_user_789'],
+      createdAtMs: DateTime.now().millisecondsSinceEpoch - 4000000,
+      shareCode: '333444',
+    ),
+  ];
+  void addGroup(Group group) => state = [...state, group];
+  void updateGroup(Group updatedGroup) => state = [
+    for (final group in state)
+      if (group.id == updatedGroup.id) updatedGroup else group,
+  ];
+  void deleteGroup(String groupId) => state = [
+    for (final group in state)
+      if (group.id != groupId) group,
+  ];
+}
+
+final developerGroupsProvider =
+    NotifierProvider<DeveloperGroupsNotifier, List<Group>>(
+      DeveloperGroupsNotifier.new,
+    );
+
+// Auth state provider
+final authStateProvider = StreamProvider<fb.User?>((ref) {
+  return fb.FirebaseAuth.instance.authStateChanges();
+});
+// ...existing code...
+// Shows the Create New Group dialog and closes it only after successful creation
+void _showNewGroupDialog(BuildContext context, WidgetRef ref) {
+  final nameController = TextEditingController();
+  showDialog(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: const Text('Create New Group'),
+      content: TextField(
+        controller: nameController,
+        decoration: const InputDecoration(
+          labelText: 'Group Name',
+          border: OutlineInputBorder(),
+        ),
+        autofocus: true,
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(ctx).pop(),
+          child: const Text('Cancel'),
+        ),
+        ElevatedButton(
+          onPressed: () async {
+            final name = nameController.text.trim();
+            if (name.isEmpty) return;
+            final devMode = ref.read(developerModeProvider);
+            final currentUser = ref.read(currentUserProvider);
+            bool success = false;
+            try {
+              if (devMode && currentUser != null) {
+                final newGroup = Group(
+                  id: 'dev_group_${DateTime.now().millisecondsSinceEpoch}',
+                  name: name,
+                  memberUserIds: [currentUser.uid],
+                  createdAtMs: DateTime.now().millisecondsSinceEpoch,
+                  shareCode:
+                      '${DateTime.now().millisecondsSinceEpoch % 1000000}'
+                          .padLeft(6, '0'),
+                );
+                ref.read(developerGroupsProvider.notifier).addGroup(newGroup);
+                success = true;
+              } else {
+                final user = fb.FirebaseAuth.instance.currentUser;
+                if (user != null) {
+                  final repo = ref.read(firestoreRepositoryProvider);
+                  await repo.createGroup(name: name, memberUserIds: [user.uid]);
+                  success = true;
+                }
+              }
+              if (success && Navigator.of(ctx).canPop()) {
+                Navigator.of(ctx).pop();
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text('Group "$name" created successfully'),
+                    backgroundColor: Colors.green,
+                    duration: const Duration(seconds: 3),
+                  ),
+                );
+              }
+            } catch (e) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text('Error creating group: $e'),
+                  backgroundColor: Colors.red,
+                  duration: const Duration(seconds: 3),
+                ),
+              );
+            }
+          },
+          child: const Text('Create'),
+        ),
+      ],
+    ),
+  );
+}
+
+final sharedPreferencesProvider = Provider<SharedPreferences>((ref) {
+  if (kIsWeb)
+    throw UnimplementedError(
+      'sharedPreferencesProvider is not available on web',
+    );
+  throw UnimplementedError('sharedPreferencesProvider must be overridden');
+});
+// ...existing code...
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -48,111 +206,15 @@ class ThemeNotifier extends Notifier<ThemeMode> {
 
   @override
   ThemeMode build() {
-    _loadTheme();
+    // TODO: Load theme from storage if needed
     return ThemeMode.system;
   }
 
   void setThemeMode(ThemeMode mode) {
     state = mode;
-    _saveTheme(mode);
-  }
-
-  Future<void> _loadTheme() async {
-    final prefs = await SharedPreferences.getInstance();
-    final themeIndex = prefs.getInt(_themeKey);
-    if (themeIndex != null) {
-      state = ThemeMode.values[themeIndex];
-    }
-  }
-
-  Future<void> _saveTheme(ThemeMode mode) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setInt(_themeKey, mode.index);
+    // TODO: Persist theme mode if needed
   }
 }
-
-final themeNotifierProvider = NotifierProvider<ThemeNotifier, ThemeMode>(
-  ThemeNotifier.new,
-);
-
-// Simple auth state provider
-final authStateProvider = StreamProvider<User?>((ref) {
-  return fb.FirebaseAuth.instance.authStateChanges();
-});
-
-// Developer mode notifier
-class DeveloperModeNotifier extends Notifier<bool> {
-  @override
-  bool build() => false;
-
-  void setDeveloperMode(bool value) {
-    state = value;
-  }
-}
-
-final developerModeProvider = NotifierProvider<DeveloperModeNotifier, bool>(
-  DeveloperModeNotifier.new,
-);
-
-// Developer groups notifier - mutable for adding groups
-class DeveloperGroupsNotifier extends Notifier<List<Group>> {
-  @override
-  List<Group> build() {
-    final devMode = ref.watch(developerModeProvider);
-    if (!devMode) return [];
-
-    return [
-      Group(
-        id: 'dev_group_1',
-        name: 'Trip to Tokyo',
-        memberUserIds: [
-          'dev_user_123',
-          'user_alice',
-          'user_bob',
-          'user_charlie',
-        ],
-        createdAtMs: DateTime.now()
-            .subtract(const Duration(days: 2))
-            .millisecondsSinceEpoch,
-        shareCode: '123456',
-      ),
-      Group(
-        id: 'dev_group_2',
-        name: 'Dinner with Friends',
-        memberUserIds: ['dev_user_123', 'user_david', 'user_eve'],
-        createdAtMs: DateTime.now()
-            .subtract(const Duration(days: 1))
-            .millisecondsSinceEpoch,
-        shareCode: '234567',
-      ),
-      Group(
-        id: 'dev_group_3',
-        name: 'Office Lunch',
-        memberUserIds: ['dev_user_123', 'user_frank', 'user_grace'],
-        createdAtMs: DateTime.now()
-            .subtract(const Duration(hours: 6))
-            .millisecondsSinceEpoch,
-        shareCode: '345678',
-      ),
-    ];
-  }
-
-  void addGroup(Group group) {
-    state = [...state, group];
-  }
-
-  void updateGroup(Group updatedGroup) {
-    state = [
-      for (final group in state)
-        if (group.id == updatedGroup.id) updatedGroup else group,
-    ];
-  }
-}
-
-final developerGroupsProvider =
-    NotifierProvider<DeveloperGroupsNotifier, List<Group>>(
-      DeveloperGroupsNotifier.new,
-    );
 
 // Developer user profiles provider - mutable state
 class DeveloperUserProfilesNotifier extends Notifier<Map<String, UserProfile>> {
@@ -247,155 +309,222 @@ final developerUserProfilesProvider =
     );
 
 // Get user profile by ID (works with both dev and real data)
-final userProfileByIdProvider = Provider.family<UserProfile?, String>((
+final userProfileByIdProvider = FutureProvider.family<UserProfile?, String>((
   ref,
   userId,
-) {
+) async {
   final devMode = ref.watch(developerModeProvider);
-
   if (devMode) {
     final devProfiles = ref.watch(developerUserProfilesProvider);
     return devProfiles[userId];
   } else {
-    // TODO: Connect to real user profile data
-    return null;
-  }
-});
-
-// Store developer expenses in a simple map
-final Map<String, List<Expense>> _developerExpensesMap = {};
-
-// Developer expenses provider - simple provider that uses the map
-final developerExpensesProvider = Provider.family<List<Expense>, String>((
-  ref,
-  groupId,
-) {
-  final devMode = ref.watch(developerModeProvider);
-  if (!devMode) return [];
-
-  // Initialize with default data if not present
-  if (!_developerExpensesMap.containsKey(groupId)) {
-    switch (groupId) {
-      case 'dev_group_1':
-        _developerExpensesMap[groupId] = [
-          Expense(
-            id: 'exp1',
-            groupId: groupId,
-            description: 'Hotel room (3 nights)',
-            amountCents: 45000,
-            paidByUserId: 'dev_user_123',
-            splitUserIds: ['dev_user_123', 'user_alice', 'user_bob'],
-            createdAtMs: DateTime.now()
-                .subtract(const Duration(days: 2))
-                .millisecondsSinceEpoch,
-            splitMode: SplitMode.equal,
-          ),
-          Expense(
-            id: 'exp2',
-            groupId: groupId,
-            description: 'Sushi dinner',
-            amountCents: 12000,
-            paidByUserId: 'user_alice',
-            splitUserIds: [
-              'dev_user_123',
-              'user_alice',
-              'user_bob',
-              'user_charlie',
-            ],
-            createdAtMs: DateTime.now()
-                .subtract(const Duration(days: 1))
-                .millisecondsSinceEpoch,
-            splitMode: SplitMode.equal,
-          ),
-          Expense(
-            id: 'exp3',
-            groupId: groupId,
-            description: 'Train tickets',
-            amountCents: 8500,
-            paidByUserId: 'user_bob',
-            splitUserIds: ['dev_user_123', 'user_alice', 'user_bob'],
-            createdAtMs: DateTime.now()
-                .subtract(const Duration(hours: 6))
-                .millisecondsSinceEpoch,
-            splitMode: SplitMode.custom,
-            customAmounts: {
-              'dev_user_123': 3000,
-              'user_alice': 2500,
-              'user_bob': 3000,
-            },
-          ),
-        ];
-        break;
-      case 'dev_group_2':
-        _developerExpensesMap[groupId] = [
-          Expense(
-            id: 'exp4',
-            groupId: groupId,
-            description: 'Pizza and drinks',
-            amountCents: 6500,
-            paidByUserId: 'dev_user_123',
-            splitUserIds: ['dev_user_123', 'user_david', 'user_eve'],
-            createdAtMs: DateTime.now()
-                .subtract(const Duration(hours: 3))
-                .millisecondsSinceEpoch,
-            splitMode: SplitMode.percent,
-            percentages: {
-              'dev_user_123': 0.4,
-              'user_david': 0.3,
-              'user_eve': 0.3,
-            },
-          ),
-        ];
-        break;
-      case 'dev_group_3':
-        _developerExpensesMap[groupId] = [
-          Expense(
-            id: 'exp5',
-            groupId: groupId,
-            description: 'Sandwiches and coffee',
-            amountCents: 3200,
-            paidByUserId: 'user_frank',
-            splitUserIds: ['dev_user_123', 'user_frank', 'user_grace'],
-            createdAtMs: DateTime.now()
-                .subtract(const Duration(hours: 1))
-                .millisecondsSinceEpoch,
-            splitMode: SplitMode.equal,
-          ),
-        ];
-        break;
-      default:
-        _developerExpensesMap[groupId] = [];
+    if (!kIsWeb) {
+      final prefs = await SharedPreferences.getInstance();
+      final cached = prefs.getString('cached_profile_$userId');
+      if (cached != null) {
+        final cachedProfile = UserProfile.fromJson(json.decode(cached));
+        Future.microtask(() async {
+          final repo = ref.read(userProfileRepositoryProvider);
+          final profile = await repo.getUserProfile(userId);
+          if (profile != null) {
+            await prefs.setString(
+              'cached_profile_$userId',
+              json.encode(profile.toJson()),
+            );
+          }
+        });
+        return cachedProfile;
+      } else {
+        final repo = ref.read(userProfileRepositoryProvider);
+        final profile = await repo.getUserProfile(userId);
+        if (profile != null) {
+          await prefs.setString(
+            'cached_profile_$userId',
+            json.encode(profile.toJson()),
+          );
+        }
+        return profile;
+      }
+    } else {
+      // Web: skip caching, just fetch from Firestore/network
+      final repo = ref.read(userProfileRepositoryProvider);
+      return await repo.getUserProfile(userId);
     }
   }
-
-  return _developerExpensesMap[groupId] ?? [];
 });
 
-// Helper function to add expense to developer data
-void addDeveloperExpense(String groupId, Expense expense) {
-  final newExpense = Expense(
-    id: 'exp_${DateTime.now().millisecondsSinceEpoch}',
-    groupId: expense.groupId,
-    description: expense.description,
-    amountCents: expense.amountCents,
-    paidByUserId: expense.paidByUserId,
-    splitUserIds: expense.splitUserIds,
-    createdAtMs: expense.createdAtMs,
-    splitMode: expense.splitMode,
-    customAmounts: expense.customAmounts,
-    percentages: expense.percentages,
-  );
+// Developer expenses notifier - mutable state
+class DeveloperExpensesNotifier extends Notifier<Map<String, List<Expense>>> {
+  @override
+  Map<String, List<Expense>> build() {
+    return {
+      'dev_group_1': [
+        Expense(
+          id: 'exp1',
+          groupId: 'dev_group_1',
+          description: 'Hotel room (3 nights)',
+          amountCents: 45000,
+          paidByUserId: 'dev_user_123',
+          splitUserIds: ['dev_user_123', 'dev_user_456', 'dev_user_789'],
+          createdAtMs: DateTime.now().subtract(const Duration(days: 2)).millisecondsSinceEpoch,
+          splitMode: SplitMode.equal,
+        ),
+        Expense(
+          id: 'exp2',
+          groupId: 'dev_group_1',
+          description: 'Dinner at restaurant',
+          amountCents: 18000,
+          paidByUserId: 'dev_user_456',
+          splitUserIds: ['dev_user_123', 'dev_user_456', 'dev_user_789'],
+          createdAtMs: DateTime.now().subtract(const Duration(days: 1)).millisecondsSinceEpoch,
+          splitMode: SplitMode.equal,
+        ),
+        Expense(
+          id: 'exp3',
+          groupId: 'dev_group_1',
+          description: 'Museum tickets',
+          amountCents: 6000,
+          paidByUserId: 'dev_user_789',
+          splitUserIds: ['dev_user_123', 'dev_user_456', 'dev_user_789'],
+          createdAtMs: DateTime.now().subtract(const Duration(hours: 20)).millisecondsSinceEpoch,
+          splitMode: SplitMode.percent,
+          percentages: {
+            'dev_user_123': 0.5,
+            'dev_user_456': 0.25,
+            'dev_user_789': 0.25,
+          },
+        ),
+      ],
+      'dev_group_2': [
+        Expense(
+          id: 'exp4',
+          groupId: 'dev_group_2',
+          description: 'Groceries',
+          amountCents: 9000,
+          paidByUserId: 'dev_user_123',
+          splitUserIds: ['dev_user_123', 'dev_user_456'],
+          createdAtMs: DateTime.now().subtract(const Duration(days: 3)).millisecondsSinceEpoch,
+          splitMode: SplitMode.equal,
+        ),
+        Expense(
+          id: 'exp5',
+          groupId: 'dev_group_2',
+          description: 'Internet bill',
+          amountCents: 4000,
+          paidByUserId: 'dev_user_456',
+          splitUserIds: ['dev_user_123', 'dev_user_456'],
+          createdAtMs: DateTime.now().subtract(const Duration(days: 2)).millisecondsSinceEpoch,
+          splitMode: SplitMode.percent,
+          percentages: {
+            'dev_user_123': 0.6,
+            'dev_user_456': 0.4,
+          },
+        ),
+      ],
+      'dev_group_3': [
+        Expense(
+          id: 'exp6',
+          groupId: 'dev_group_3',
+          description: 'Family dinner',
+          amountCents: 20000,
+          paidByUserId: 'dev_user_999',
+          splitUserIds: ['dev_user_123', 'dev_user_999', 'dev_user_888', 'dev_user_777'],
+          createdAtMs: DateTime.now().subtract(const Duration(days: 1)).millisecondsSinceEpoch,
+          splitMode: SplitMode.equal,
+        ),
+        Expense(
+          id: 'exp7',
+          groupId: 'dev_group_3',
+          description: 'Taxi',
+          amountCents: 3500,
+          paidByUserId: 'dev_user_888',
+          splitUserIds: ['dev_user_123', 'dev_user_999', 'dev_user_888', 'dev_user_777'],
+          createdAtMs: DateTime.now().subtract(const Duration(hours: 10)).millisecondsSinceEpoch,
+          splitMode: SplitMode.percent,
+          percentages: {
+            'dev_user_123': 0.2,
+            'dev_user_999': 0.3,
+            'dev_user_888': 0.3,
+            'dev_user_777': 0.2,
+          },
+        ),
+      ],
+      'dev_group_4': [
+        Expense(
+          id: 'exp8',
+          groupId: 'dev_group_4',
+          description: 'Team lunch',
+          amountCents: 15000,
+          paidByUserId: 'dev_user_654',
+          splitUserIds: ['dev_user_123', 'dev_user_456', 'dev_user_321', 'dev_user_654', 'dev_user_789'],
+          createdAtMs: DateTime.now().subtract(const Duration(days: 4)).millisecondsSinceEpoch,
+          splitMode: SplitMode.equal,
+        ),
+        Expense(
+          id: 'exp9',
+          groupId: 'dev_group_4',
+          description: 'Office supplies',
+          amountCents: 7000,
+          paidByUserId: 'dev_user_321',
+          splitUserIds: ['dev_user_123', 'dev_user_456', 'dev_user_321', 'dev_user_654', 'dev_user_789'],
+          createdAtMs: DateTime.now().subtract(const Duration(days: 2)).millisecondsSinceEpoch,
+          splitMode: SplitMode.percent,
+          percentages: {
+            'dev_user_123': 0.1,
+            'dev_user_456': 0.2,
+            'dev_user_321': 0.3,
+            'dev_user_654': 0.2,
+            'dev_user_789': 0.2,
+          },
+        ),
+      ],
+    };
+  }
 
-  _developerExpensesMap[groupId] ??= [];
-  _developerExpensesMap[groupId]!.add(newExpense);
+  void addExpense(String groupId, Expense expense) {
+    final newExpense = Expense(
+      id: 'exp_${DateTime.now().millisecondsSinceEpoch}',
+      groupId: expense.groupId,
+      description: expense.description,
+      amountCents: expense.amountCents,
+      paidByUserId: expense.paidByUserId,
+      splitUserIds: expense.splitUserIds,
+      createdAtMs: expense.createdAtMs,
+      splitMode: expense.splitMode,
+      customAmounts: expense.customAmounts,
+      percentages: expense.percentages,
+    );
+
+    final currentExpenses = state[groupId] ?? [];
+    state = {
+      ...state,
+      groupId: [...currentExpenses, newExpense],
+    };
+  }
+
+  void removeExpense(String groupId, String expenseId) {
+    final currentExpenses = state[groupId] ?? [];
+    state = {
+      ...state,
+      groupId: currentExpenses.where((e) => e.id != expenseId).toList(),
+    };
+  }
 }
 
-// Helper function to remove expense from developer data
-void removeDeveloperExpense(String groupId, String expenseId) {
-  _developerExpensesMap[groupId]?.removeWhere(
-    (expense) => expense.id == expenseId,
-  );
-}
+final developerExpensesProvider =
+    NotifierProvider<DeveloperExpensesNotifier, Map<String, List<Expense>>>(
+      DeveloperExpensesNotifier.new,
+    );
+
+// Family provider to get expenses for a specific group
+final developerExpensesForGroupProvider =
+    Provider.family<List<Expense>, String>((ref, groupId) {
+      final devMode = ref.watch(developerModeProvider);
+      if (!devMode) return [];
+
+      final allExpenses = ref.watch(developerExpensesProvider);
+      return allExpenses[groupId] ?? [];
+    });
 
 // Cached expenses provider to avoid multiple Firestore queries
 final expensesProvider = StreamProvider.family<List<Expense>, String>((
@@ -407,7 +536,7 @@ final expensesProvider = StreamProvider.family<List<Expense>, String>((
 
   // For developer mode, use developer expenses provider
   if (devMode) {
-    final devExpenses = ref.watch(developerExpensesProvider(groupId));
+    final devExpenses = ref.watch(developerExpensesForGroupProvider(groupId));
     return Stream.value(devExpenses);
   }
 
@@ -476,14 +605,15 @@ String getUserDisplayNameFromProfile(String userId, WidgetRef ref) {
 
   // Check if this is the current user
   if (currentUser != null && userId == currentUser.uid) {
-    // Use the current user's display name from authentication
     if (currentUser.displayName != null &&
         currentUser.displayName!.isNotEmpty) {
-      return devMode ? 'You (${currentUser.displayName})' : 'You';
+      return devMode ? 'You (${currentUser.displayName!})' : 'You';
     }
+    return 'You';
   }
 
-  final userProfile = ref.watch(userProfileByIdProvider(userId));
+  final userProfileAsync = ref.watch(userProfileByIdProvider(userId));
+  final userProfile = userProfileAsync.value;
   if (userProfile != null) {
     return userId == 'dev_user_123' ? 'You' : userProfile.displayName;
   }
@@ -774,19 +904,20 @@ class CurrencyConversionService {
       }
 
       // Try to load from SharedPreferences
-      final prefs = await SharedPreferences.getInstance();
-      final cachedData = prefs.getString(_cacheKey);
-      final cacheTimeStr = prefs.getString(_cacheTimeKey);
-
-      if (cachedData != null && cacheTimeStr != null) {
-        final cacheTime = DateTime.parse(cacheTimeStr);
-        if (DateTime.now().difference(cacheTime) < _cacheExpiry) {
-          final Map<String, dynamic> decoded = json.decode(cachedData);
-          _cachedRates = decoded.map(
-            (key, value) => MapEntry(key, value.toDouble()),
-          );
-          _cacheTime = cacheTime;
-          return _cachedRates!;
+      if (!kIsWeb) {
+        final prefs = await SharedPreferences.getInstance();
+        final cachedData = prefs.getString(_cacheKey);
+        final cacheTimeStr = prefs.getString(_cacheTimeKey);
+        if (cachedData != null && cacheTimeStr != null) {
+          final cacheTime = DateTime.parse(cacheTimeStr);
+          if (DateTime.now().difference(cacheTime) < _cacheExpiry) {
+            final Map<String, dynamic> decoded = json.decode(cachedData);
+            _cachedRates = decoded.map(
+              (key, value) => MapEntry(key, value.toDouble()),
+            );
+            _cacheTime = cacheTime;
+            return _cachedRates!;
+          }
         }
       }
 
@@ -808,8 +939,11 @@ class CurrencyConversionService {
         _cacheTime = DateTime.now();
 
         // Cache the results
-        await prefs.setString(_cacheKey, json.encode(_cachedRates));
-        await prefs.setString(_cacheTimeKey, _cacheTime!.toIso8601String());
+        if (!kIsWeb) {
+          final prefs = await SharedPreferences.getInstance();
+          await prefs.setString(_cacheKey, json.encode(_cachedRates));
+          await prefs.setString(_cacheTimeKey, _cacheTime!.toIso8601String());
+        }
 
         return _cachedRates!;
       } else {
@@ -1214,7 +1348,7 @@ class MyApp extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final devMode = ref.watch(developerModeProvider);
-    ref.listen<AsyncValue<User?>>(authStateProvider, (_, next) async {
+    ref.listen<AsyncValue<fb.User?>>(authStateProvider, (_, next) async {
       final user = next.value;
       if (user != null) {
         try {
@@ -2255,10 +2389,13 @@ class _GroupsScreenState extends ConsumerState<GroupsScreen> {
   _OverallBalance? _cachedBalance;
   int _lastBalanceCalculationHash = 0;
   Stream<List<Group>>? _groupsStream;
+  List<Group>? _cachedGroups;
+  bool _firestoreLoaded = false;
 
   @override
   void initState() {
     super.initState();
+    _loadCachedGroups();
     _initializeGroupsStream();
   }
 
@@ -2271,8 +2408,31 @@ class _GroupsScreenState extends ConsumerState<GroupsScreen> {
       _groupsStream = ref
           .read(firestoreRepositoryProvider)
           .watchGroups(currentUser.uid);
+      _groupsStream!.listen((groups) async {
+        setState(() {
+          _cachedGroups = groups;
+          _firestoreLoaded = true;
+        });
+        // Save to SharedPreferences
+        if (!kIsWeb) {
+          final prefs = await SharedPreferences.getInstance();
+          prefs.setString('cached_groups', Group.encodeList(groups));
+        }
+      });
     } else {
       _groupsStream = Stream.value(<Group>[]);
+    }
+  }
+
+  Future<void> _loadCachedGroups() async {
+    if (!kIsWeb) {
+      final prefs = await SharedPreferences.getInstance();
+      final cached = prefs.getString('cached_groups');
+      if (cached != null) {
+        setState(() {
+          _cachedGroups = Group.decodeList(cached);
+        });
+      }
     }
   }
 
@@ -2292,7 +2452,8 @@ class _GroupsScreenState extends ConsumerState<GroupsScreen> {
   }
 
   Widget _buildUserAvatar(String userId, WidgetRef ref, {double size = 32}) {
-    final userProfile = ref.watch(userProfileByIdProvider(userId));
+    final userProfileAsync = ref.watch(userProfileByIdProvider(userId));
+    final userProfile = userProfileAsync.value;
 
     return Container(
       width: size,
@@ -2304,10 +2465,11 @@ class _GroupsScreenState extends ConsumerState<GroupsScreen> {
       child: CircleAvatar(
         radius: (size - 4) / 2,
         backgroundColor: _getUserColor(userId),
-        backgroundImage: userProfile?.profileImageUrl != null
-            ? NetworkImage(userProfile!.profileImageUrl!)
+        backgroundImage:
+            userProfile != null && userProfile.profileImageUrl != null
+            ? NetworkImage(userProfile.profileImageUrl!)
             : null,
-        child: userProfile?.profileImageUrl == null
+        child: userProfile == null || userProfile.profileImageUrl == null
             ? Text(
                 userProfile?.initials ?? _getUserInitials(userId),
                 style: TextStyle(
@@ -2517,194 +2679,79 @@ class _GroupsScreenState extends ConsumerState<GroupsScreen> {
                           ),
                           const SizedBox(height: 24),
                           // Groups list
-                          isDevUser
-                              ? Consumer(
-                                  builder: (context, ref, child) {
-                                    final groups = ref.watch(
-                                      developerGroupsProvider,
-                                    );
-                                    if (groups.isEmpty) {
-                                      return Container(
-                                        padding: const EdgeInsets.all(32),
-                                        child: Column(
-                                          children: [
-                                            const Icon(
-                                              Icons.inbox,
-                                              size: 48,
-                                              color: Color(0xFFCBD5E0),
-                                            ),
-                                            const SizedBox(height: 16),
-                                            Text(
-                                              'No groups yet',
-                                              style: TextStyle(
-                                                fontSize: 18,
-                                                fontWeight: FontWeight.w600,
-                                                color: const Color(0xFF718096),
-                                              ),
-                                            ),
-                                            const SizedBox(height: 8),
-                                            Text(
-                                              'Create your first group to get started',
-                                              style: TextStyle(
-                                                fontSize: 14,
-                                                color: const Color(0xFFA0AEC0),
-                                              ),
-                                            ),
-                                          ],
+                          Consumer(
+                            builder: (context, ref, child) {
+                              final groups = isDevUser
+                                  ? ref.watch(developerGroupsProvider)
+                                  : _cachedGroups ?? [];
+                              if (groups.isEmpty) {
+                                return Container(
+                                  padding: const EdgeInsets.all(32),
+                                  child: Column(
+                                    children: [
+                                      const Icon(
+                                        Icons.group_add,
+                                        size: 64,
+                                        color: Color(0xFF4A5568),
+                                      ),
+                                      const SizedBox(height: 24),
+                                      Text(
+                                        'Welcome to Expense Splitter!',
+                                        style: TextStyle(
+                                          fontSize: 20,
+                                          fontWeight: FontWeight.bold,
+                                          color: const Color(0xFF2D3748),
                                         ),
-                                      );
-                                    }
-                                    return Column(
-                                      children: groups
-                                          .map(
-                                            (g) => _buildGroupCard(
-                                              context,
-                                              ref,
-                                              g,
-                                            ),
-                                          )
-                                          .toList(),
-                                    );
-                                  },
-                                )
-                              : StreamBuilder<List<Group>>(
-                                  stream:
-                                      _groupsStream ?? Stream.value(<Group>[]),
-                                  builder: (context, snap) {
-                                    if (snap.connectionState ==
-                                        ConnectionState.waiting) {
-                                      return Container(
-                                        padding: const EdgeInsets.all(32),
-                                        child: Column(
-                                          children: [
-                                            const CircularProgressIndicator(),
-                                            const SizedBox(height: 16),
-                                            Text(
-                                              'Loading your groups...',
-                                              style: TextStyle(
-                                                fontSize: 16,
-                                                color: const Color(0xFF718096),
-                                              ),
-                                            ),
-                                          ],
+                                      ),
+                                      const SizedBox(height: 12),
+                                      Text(
+                                        'Create your first group to start\nsplitting expenses with friends',
+                                        textAlign: TextAlign.center,
+                                        style: TextStyle(
+                                          fontSize: 16,
+                                          color: const Color(0xFF718096),
                                         ),
-                                      );
-                                    }
-                                    if (snap.hasError) {
-                                      return Center(
-                                        child: Column(
-                                          children: [
-                                            const Icon(
-                                              Icons.cloud_off,
-                                              size: 48,
-                                              color: Color(0xFFE53E3E),
-                                            ),
-                                            const SizedBox(height: 16),
-                                            Text(
-                                              'Connection Issue',
-                                              style: TextStyle(
-                                                fontSize: 18,
-                                                fontWeight: FontWeight.w600,
-                                                color: const Color(0xFFE53E3E),
-                                              ),
-                                            ),
-                                            const SizedBox(height: 8),
-                                            Text(
-                                              'Your groups are temporarily unavailable.\nThey will reappear once connection is restored.',
-                                              textAlign: TextAlign.center,
-                                              style: TextStyle(
-                                                fontSize: 14,
-                                                color: const Color(0xFFA0AEC0),
-                                              ),
-                                            ),
-                                            const SizedBox(height: 16),
-                                            ElevatedButton.icon(
-                                              onPressed: () => setState(
-                                                () {},
-                                              ), // Trigger rebuild
-                                              icon: const Icon(Icons.refresh),
-                                              label: const Text('Retry'),
-                                            ),
-                                          ],
+                                      ),
+                                      const SizedBox(height: 24),
+                                      ElevatedButton.icon(
+                                        onPressed: () =>
+                                            _showNewGroupDialog(context, ref),
+                                        icon: const Icon(
+                                          Icons.add_circle,
+                                          color: Colors.white,
                                         ),
-                                      );
-                                    }
-                                    final groups = snap.data ?? [];
-                                    if (groups.isEmpty) {
-                                      return Container(
-                                        padding: const EdgeInsets.all(32),
-                                        child: Column(
-                                          children: [
-                                            const Icon(
-                                              Icons.group_add,
-                                              size: 64,
-                                              color: Color(0xFF4A5568),
-                                            ),
-                                            const SizedBox(height: 24),
-                                            Text(
-                                              'Welcome to Expense Splitter!',
-                                              style: TextStyle(
-                                                fontSize: 20,
-                                                fontWeight: FontWeight.bold,
-                                                color: const Color(0xFF2D3748),
-                                              ),
-                                            ),
-                                            const SizedBox(height: 12),
-                                            Text(
-                                              'Create your first group to start\nsplitting expenses with friends',
-                                              textAlign: TextAlign.center,
-                                              style: TextStyle(
-                                                fontSize: 16,
-                                                color: const Color(0xFF718096),
-                                              ),
-                                            ),
-                                            const SizedBox(height: 24),
-                                            ElevatedButton.icon(
-                                              onPressed: () =>
-                                                  _showNewGroupDialog(
-                                                    context,
-                                                    ref,
-                                                  ),
-                                              icon: const Icon(
-                                                Icons.add_circle,
-                                                color: Colors.white,
-                                              ),
-                                              label: const Text(
-                                                'Create Your First Group',
-                                              ),
-                                              style: ElevatedButton.styleFrom(
-                                                backgroundColor: const Color(
-                                                  0xFF2D3748,
-                                                ),
-                                                foregroundColor: Colors.white,
-                                                padding:
-                                                    const EdgeInsets.symmetric(
-                                                      horizontal: 24,
-                                                      vertical: 16,
-                                                    ),
-                                                shape: RoundedRectangleBorder(
-                                                  borderRadius:
-                                                      BorderRadius.circular(12),
-                                                ),
-                                              ),
-                                            ),
-                                          ],
+                                        label: const Text(
+                                          'Create Your First Group',
                                         ),
-                                      );
-                                    }
-                                    return Column(
-                                      children: groups
-                                          .map(
-                                            (g) => _buildGroupCard(
-                                              context,
-                                              ref,
-                                              g,
+                                        style: ElevatedButton.styleFrom(
+                                          backgroundColor: const Color(
+                                            0xFF2D3748,
+                                          ),
+                                          foregroundColor: Colors.white,
+                                          padding: const EdgeInsets.symmetric(
+                                            horizontal: 24,
+                                            vertical: 16,
+                                          ),
+                                          shape: RoundedRectangleBorder(
+                                            borderRadius: BorderRadius.circular(
+                                              12,
                                             ),
-                                          )
-                                          .toList(),
-                                    );
-                                  },
-                                ),
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                );
+                              }
+                              return Column(
+                                children: groups
+                                    .map(
+                                      (g) => _buildGroupCard(context, ref, g),
+                                    )
+                                    .toList(),
+                              );
+                            },
+                          ),
                         ],
                       ),
                     ),
@@ -2824,7 +2871,7 @@ class _GroupsScreenState extends ConsumerState<GroupsScreen> {
       currentHash = groups.length.hashCode;
       // Add more factors to hash if needed
       for (final group in groups) {
-        final expenses = ref.watch(developerExpensesProvider(group.id));
+        final expenses = ref.watch(developerExpensesForGroupProvider(group.id));
         currentHash ^= expenses.length.hashCode;
       }
     }
@@ -2844,7 +2891,7 @@ class _GroupsScreenState extends ConsumerState<GroupsScreen> {
       final currentUserId = 'dev_user_123';
 
       for (final group in groups) {
-        final expenses = ref.watch(developerExpensesProvider(group.id));
+        final expenses = ref.watch(developerExpensesForGroupProvider(group.id));
         final settlements = _greedyDebtSettlement(
           _calculateBalancesForGroup(group, expenses, currentUserId),
         );
@@ -2902,7 +2949,7 @@ class _GroupsScreenState extends ConsumerState<GroupsScreen> {
 
     // Get expenses for this group to calculate balance
     final expenses = devMode
-        ? ref.watch(developerExpensesProvider(group.id))
+        ? ref.watch(developerExpensesForGroupProvider(group.id))
         : <Expense>[];
 
     // Calculate user's balance in this group
@@ -3771,7 +3818,9 @@ class _GroupsScreenState extends ConsumerState<GroupsScreen> {
   ) {
     if (devMode) {
       // Show developer expenses
-      final groupExpenses = ref.watch(developerExpensesProvider(group.id));
+      final groupExpenses = ref.watch(
+        developerExpensesForGroupProvider(group.id),
+      );
 
       if (groupExpenses.isEmpty) {
         return Container(
@@ -3802,8 +3851,10 @@ class _GroupsScreenState extends ConsumerState<GroupsScreen> {
         );
       }
 
+      final sorted = groupExpenses.toList()
+        ..sort((a, b) => b.createdAtMs.compareTo(a.createdAtMs));
       return Column(
-        children: groupExpenses.take(3).map((expense) {
+        children: sorted.take(3).map((expense) {
           return Container(
             margin: const EdgeInsets.only(bottom: 8),
             padding: const EdgeInsets.all(12),
@@ -3867,13 +3918,7 @@ class _GroupsScreenState extends ConsumerState<GroupsScreen> {
     } else {
       // Show real expenses from Firestore
       return StreamBuilder<List<Expense>>(
-        stream: ref
-            .watch(firestoreRepositoryProvider)
-            .watchExpenses(group.id)
-            .timeout(
-              const Duration(seconds: 5),
-              onTimeout: (sink) => sink.add([]), // Return empty list on timeout
-            ),
+        stream: ref.watch(firestoreRepositoryProvider).watchExpenses(group.id),
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting) {
             return const Center(child: CircularProgressIndicator());
@@ -3883,7 +3928,10 @@ class _GroupsScreenState extends ConsumerState<GroupsScreen> {
             return Text('Error: ${snapshot.error}');
           }
 
-          final expenses = snapshot.data ?? [];
+          final groupExpenses = snapshot.data ?? [];
+          final sorted = groupExpenses.toList()
+            ..sort((a, b) => b.createdAtMs.compareTo(a.createdAtMs));
+          final expenses = sorted.take(3).toList();
 
           if (expenses.isEmpty) {
             return Container(
@@ -4167,58 +4215,49 @@ dela makes it easy to split bills and track expenses with friends!
             onPressed: () async {
               final name = nameController.text.trim();
               if (name.isEmpty) return;
-
               final devMode = ref.read(developerModeProvider);
               final currentUser = ref.read(currentUserProvider);
-
-              if (devMode && currentUser != null) {
-                // In developer mode, add to the developer groups provider
-                final newGroup = Group(
-                  id: 'dev_group_${DateTime.now().millisecondsSinceEpoch}',
-                  name: name,
-                  memberUserIds: [currentUser.uid],
-                  createdAtMs: DateTime.now().millisecondsSinceEpoch,
-                  shareCode:
-                      '${DateTime.now().millisecondsSinceEpoch % 1000000}'
-                          .padLeft(6, '0'),
-                );
-                ref.read(developerGroupsProvider.notifier).addGroup(newGroup);
-                Navigator.pop(context);
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text('Group "$name" created successfully')),
-                );
-              } else {
-                // Real mode - use Firestore
-                final user = fb.FirebaseAuth.instance.currentUser;
-                if (user != null) {
-                  try {
-                    print('Creating group "$name" for user ${user.uid}');
+              try {
+                if (devMode && currentUser != null) {
+                  final newGroup = Group(
+                    id: 'dev_group_${DateTime.now().millisecondsSinceEpoch}',
+                    name: name,
+                    memberUserIds: [currentUser.uid],
+                    createdAtMs: DateTime.now().millisecondsSinceEpoch,
+                    shareCode:
+                        '${DateTime.now().millisecondsSinceEpoch % 1000000}'
+                            .padLeft(6, '0'),
+                  );
+                  ref.read(developerGroupsProvider.notifier).addGroup(newGroup);
+                  // Optionally update local cache here
+                } else {
+                  final user = fb.FirebaseAuth.instance.currentUser;
+                  if (user != null) {
                     final repo = ref.read(firestoreRepositoryProvider);
                     final groupId = await repo.createGroup(
                       name: name,
                       memberUserIds: [user.uid],
                     );
-                    print('Group created successfully with ID: $groupId');
-                    Navigator.pop(context);
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Text('Group "$name" created successfully'),
-                        backgroundColor: Colors.green,
-                        duration: const Duration(seconds: 3),
-                      ),
-                    );
-                  } catch (e) {
-                    print('Error creating group: $e');
-                    Navigator.pop(context);
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Text('Error creating group: $e'),
-                        backgroundColor: Colors.red,
-                        duration: const Duration(seconds: 5),
-                      ),
-                    );
+                    // Optionally update local cache here
                   }
                 }
+                Navigator.pop(context);
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text('Group "$name" created successfully'),
+                    backgroundColor: Colors.green,
+                    duration: const Duration(seconds: 3),
+                  ),
+                );
+              } catch (e) {
+                Navigator.pop(context);
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text('Error creating group: $e'),
+                    backgroundColor: Colors.red,
+                    duration: const Duration(seconds: 5),
+                  ),
+                );
               }
             },
             child: const Text('Create'),
@@ -4242,7 +4281,7 @@ dela makes it easy to split bills and track expenses with friends!
     }
 
     // Get expenses for this group
-    final expenses = ref.watch(developerExpensesProvider(group.id));
+    final expenses = ref.watch(developerExpensesForGroupProvider(group.id));
 
     if (expenses.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -4455,13 +4494,14 @@ dela makes it easy to split bills and track expenses with friends!
                           ),
                         );
                         if (confirm == true) {
-                          await ref
-                              .read(firestoreRepositoryProvider)
-                              .deleteGroup(group.id);
+                          final devMode = ref.read(developerModeProvider);
+                          if (devMode) {
+                            ref.read(developerGroupsProvider.notifier).deleteGroup(group.id);
+                          } else {
+                            await ref.read(firestoreRepositoryProvider).deleteGroup(group.id);
+                          }
                           if (context.mounted) {
-                            Navigator.of(
-                              context,
-                            ).pop(); // Close settings dialog
+                            Navigator.of(context).pop(); // Close settings dialog
                             context.go('/groups');
                           }
                         }
@@ -5622,6 +5662,7 @@ class _AddExpenseDialogState extends ConsumerState<_AddExpenseDialog> {
   final Map<String, TextEditingController> _customAmountCtrls = {};
   final Map<String, TextEditingController> _percentCtrls = {};
   List<String> _selectedUsers = [];
+  List<String> _lastLoadedMembers = [];
 
   @override
   void initState() {
@@ -5630,6 +5671,16 @@ class _AddExpenseDialogState extends ConsumerState<_AddExpenseDialog> {
     final currentUserId =
         fb.FirebaseAuth.instance.currentUser?.uid ?? 'developer_user';
     _selectedUsers = [currentUserId];
+    // Add listeners to update button state as user types
+    _descCtrl.addListener(() {
+      if (mounted) setState(() {});
+    });
+    _amountCtrl.addListener(() {
+      if (mounted) setState(() {});
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) setState(() {});
+    });
   }
 
   @override
@@ -5656,41 +5707,27 @@ class _AddExpenseDialogState extends ConsumerState<_AddExpenseDialog> {
         child: SingleChildScrollView(
           child: VStack([
             // Description field
-            Container(
-              decoration: BoxDecoration(
-                color: Theme.of(context).colorScheme.surface,
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: Colors.grey.shade300),
-              ),
-              child: TextField(
-                controller: _descCtrl,
-                decoration: const InputDecoration(
-                  labelText: 'Description',
-                  hintText: 'e.g., Dinner at restaurant',
-                  border: InputBorder.none,
-                  contentPadding: EdgeInsets.all(16),
-                ),
+            TextField(
+              controller: _descCtrl,
+              decoration: const InputDecoration(
+                labelText: 'Description',
+                hintText: 'e.g., Dinner at restaurant',
+                border: OutlineInputBorder(),
+                contentPadding: EdgeInsets.all(16),
               ),
             ),
             16.heightBox,
 
             // Amount field
-            Container(
-              decoration: BoxDecoration(
-                color: Theme.of(context).colorScheme.surface,
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: Colors.grey.shade300),
-              ),
-              child: TextField(
-                controller: _amountCtrl,
-                keyboardType: TextInputType.number,
-                decoration: const InputDecoration(
-                  labelText: 'Amount',
-                  hintText: 'e.g., 25.50',
-                  prefixText: '\$',
-                  border: InputBorder.none,
-                  contentPadding: EdgeInsets.all(16),
-                ),
+            TextField(
+              controller: _amountCtrl,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(
+                labelText: 'Amount',
+                hintText: 'e.g., 25.50',
+                prefixText: '\$',
+                border: OutlineInputBorder(),
+                contentPadding: EdgeInsets.all(16),
               ),
             ),
             24.heightBox,
@@ -5769,7 +5806,14 @@ class _AddExpenseDialogState extends ConsumerState<_AddExpenseDialog> {
           child: const Text('Cancel'),
         ),
         ElevatedButton.icon(
-          onPressed: _canAddExpense() ? _addExpense : null,
+          onPressed: _canAddExpense()
+              ? () async {
+                  await _addExpense();
+                  if (mounted && Navigator.of(context).canPop()) {
+                    Navigator.of(context).pop();
+                  }
+                }
+              : null,
           icon: const Icon(Icons.add),
           label: const Text('Add Expense'),
           style: ElevatedButton.styleFrom(
@@ -5781,9 +5825,18 @@ class _AddExpenseDialogState extends ConsumerState<_AddExpenseDialog> {
   }
 
   bool _canAddExpense() {
-    return _descCtrl.text.trim().isNotEmpty &&
-        _amountCtrl.text.trim().isNotEmpty &&
-        _selectedUsers.isNotEmpty;
+    final descFilled = _descCtrl.text.trim().isNotEmpty;
+    final amountFilled =
+        double.tryParse(_amountCtrl.text.trim()) != null &&
+        double.parse(_amountCtrl.text.trim()) > 0;
+    debugPrint(
+      'canAddExpense: descFilled=$descFilled, amountFilled=$amountFilled, selectedUsers=${_selectedUsers.length}, splitMode=$_splitMode',
+    );
+    if (_splitMode == SplitMode.equal) {
+      return descFilled && amountFilled && _selectedUsers.isNotEmpty;
+    }
+    // Add other split mode validations as needed
+    return descFilled && amountFilled;
   }
 
   Widget _buildSplitDetails() {
@@ -5904,7 +5957,17 @@ class _AddExpenseDialogState extends ConsumerState<_AddExpenseDialog> {
             const Group(id: '', name: '', memberUserIds: [], createdAtMs: 0),
       );
       final members = currentGroup.memberUserIds;
-
+      // Auto-select all members if not already done
+      if (members.isNotEmpty && (_lastLoadedMembers != members)) {
+        _lastLoadedMembers = List<String>.from(members);
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted)
+            setState(() {
+              _selectedUsers = List<String>.from(members);
+              debugPrint('Auto-selected users: $_selectedUsers');
+            });
+        });
+      }
       return Container(
         decoration: BoxDecoration(
           color: Theme.of(context).colorScheme.surface,
@@ -5914,7 +5977,6 @@ class _AddExpenseDialogState extends ConsumerState<_AddExpenseDialog> {
         child: Column(
           children: members.map((uid) {
             final isSelected = _selectedUsers.contains(uid);
-
             return InkWell(
               onTap: () {
                 setState(() {
@@ -6020,7 +6082,16 @@ class _AddExpenseDialogState extends ConsumerState<_AddExpenseDialog> {
             ),
           );
           final members = currentGroup.memberUserIds;
-
+          // Auto-select all members if not already done
+          if (members.isNotEmpty && (_lastLoadedMembers != members)) {
+            _lastLoadedMembers = List<String>.from(members);
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (mounted)
+                setState(() {
+                  _selectedUsers = List<String>.from(members);
+                });
+            });
+          }
           return Container(
             decoration: BoxDecoration(
               color: Theme.of(context).colorScheme.surface,
@@ -6030,7 +6101,6 @@ class _AddExpenseDialogState extends ConsumerState<_AddExpenseDialog> {
             child: Column(
               children: members.map((uid) {
                 final isSelected = _selectedUsers.contains(uid);
-
                 return InkWell(
                   onTap: () {
                     setState(() {
@@ -6181,16 +6251,14 @@ class _AddExpenseDialogState extends ConsumerState<_AddExpenseDialog> {
   Future<void> _addExpense() async {
     final devMode = ref.read(developerModeProvider);
     final user = fb.FirebaseAuth.instance.currentUser;
-
-    // In real mode, we need a Firebase user. In dev mode, we can use a default
-    if (!devMode && user == null) return;
-
+    if (!devMode && user == null) {
+      Navigator.of(context).pop();
+      return;
+    }
     final double parsed = double.tryParse(_amountCtrl.text.trim()) ?? 0;
     final int cents = (parsed * 100).round();
-
     Map<String, int> customAmounts = {};
     Map<String, double> percentages = {};
-
     if (_splitMode == SplitMode.custom) {
       for (final uid in _selectedUsers) {
         final amount =
@@ -6203,12 +6271,9 @@ class _AddExpenseDialogState extends ConsumerState<_AddExpenseDialog> {
         percentages[uid] = percent / 100.0;
       }
     }
-
-    // Use Firebase user ID in real mode, or a default in developer mode
     final paidByUserId = devMode
         ? 'developer_user'
         : (user?.uid ?? 'developer_user');
-
     final expense = Expense(
       id: 'new',
       groupId: widget.groupId,
@@ -6221,30 +6286,24 @@ class _AddExpenseDialogState extends ConsumerState<_AddExpenseDialog> {
       customAmounts: customAmounts,
       percentages: percentages,
     );
-
-    if (devMode) {
-      // Add to developer data
-      addDeveloperExpense(widget.groupId, expense);
-      // Force refresh the provider by invalidating it
-      ref.invalidate(developerExpensesProvider(widget.groupId));
+    try {
+      if (devMode) {
+        ref
+            .read(developerExpensesProvider.notifier)
+            .addExpense(widget.groupId, expense);
+      } else {
+        await ref.read(firestoreRepositoryProvider).addExpense(expense);
+      }
+      // Optionally update local cache here for instant UI
       Navigator.of(context).pop();
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Expense added successfully')),
       );
-    } else {
-      // Real mode - use Firestore
-      try {
-        await ref.read(firestoreRepositoryProvider).addExpense(expense);
-        Navigator.of(context).pop();
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Expense added successfully')),
-        );
-      } catch (e) {
-        Navigator.of(context).pop();
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Error adding expense: $e')));
-      }
+    } catch (e) {
+      Navigator.of(context).pop();
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Error adding expense: $e')));
     }
   }
 
@@ -6680,14 +6739,20 @@ class LanguageNotifier extends Notifier<String> {
   }
 
   Future<void> _loadLanguage() async {
-    final prefs = await SharedPreferences.getInstance();
-    final savedLanguage = prefs.getString(_languageKey) ?? 'en';
-    state = savedLanguage;
+    if (!kIsWeb) {
+      final prefs = await SharedPreferences.getInstance();
+      final savedLanguage = prefs.getString(_languageKey) ?? 'en';
+      state = savedLanguage;
+    } else {
+      state = 'en';
+    }
   }
 
   Future<void> _saveLanguage(String language) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_languageKey, language);
+    if (!kIsWeb) {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_languageKey, language);
+    }
   }
 }
 
@@ -6706,14 +6771,20 @@ class CurrencyNotifier extends Notifier<String> {
   }
 
   Future<void> _loadCurrency() async {
-    final prefs = await SharedPreferences.getInstance();
-    final savedCurrency = prefs.getString(_currencyKey) ?? 'USD';
-    state = savedCurrency;
+    if (!kIsWeb) {
+      final prefs = await SharedPreferences.getInstance();
+      final savedCurrency = prefs.getString(_currencyKey) ?? 'USD';
+      state = savedCurrency;
+    } else {
+      state = 'USD';
+    }
   }
 
   Future<void> _saveCurrency(String currency) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_currencyKey, currency);
+    if (!kIsWeb) {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_currencyKey, currency);
+    }
   }
 }
 
@@ -6722,18 +6793,26 @@ class SettingsNotifier {
   static const String _currencyKey = 'app_currency';
 
   static Future<String> loadLanguage() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getString(_languageKey) ?? 'en';
+    if (!kIsWeb) {
+      final prefs = await SharedPreferences.getInstance();
+      return prefs.getString(_languageKey) ?? 'en';
+    }
+    return 'en';
   }
 
   static Future<void> saveLanguage(String language) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_languageKey, language);
+    if (!kIsWeb) {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_languageKey, language);
+    }
   }
 
   static Future<String> loadCurrency() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getString(_currencyKey) ?? 'USD';
+    if (!kIsWeb) {
+      final prefs = await SharedPreferences.getInstance();
+      return prefs.getString(_currencyKey) ?? 'USD';
+    }
+    return 'USD';
   }
 
   static Future<void> saveCurrency(String currency) async {
@@ -7147,24 +7226,35 @@ class _ReceiptScanScreenState extends ConsumerState<ReceiptScanScreen> {
   Future<void> _pick(ImageSource source) async {
     setState(() => _isProcessing = true);
     try {
-      final ImagePicker picker = ImagePicker();
-      final XFile? file = await picker.pickImage(
-        source: source,
-        imageQuality: 85,
-      );
-      if (file == null) return;
-      final InputImage input = InputImage.fromFilePath(file.path);
-      final textRecognizer = TextRecognizer();
-      final RecognizedText result = await textRecognizer.processImage(input);
-      await textRecognizer.close();
-      final String text = result.text;
-      final int? cents = _parseTotalToCents(text);
-      setState(() {
-        _recognizedText = text;
-        _parsedTotalCents = cents;
-      });
-    } finally {
-      if (mounted) setState(() => _isProcessing = false);
+      if (!kIsWeb) {
+        final ImagePicker picker = ImagePicker();
+        final XFile? file = await picker.pickImage(
+          source: source,
+          imageQuality: 85,
+        );
+        if (file == null) {
+          setState(() => _isProcessing = false);
+          return;
+        }
+        final InputImage input = InputImage.fromFilePath(file.path);
+        final textRecognizer = TextRecognizer();
+        final RecognizedText result = await textRecognizer.processImage(input);
+        await textRecognizer.close();
+        final String text = result.text;
+        final int? cents = _parseTotalToCents(text);
+        setState(() {
+          _recognizedText = text;
+          _parsedTotalCents = cents;
+          _isProcessing = false;
+        });
+      } else {
+        // Web fallback: show message or skip
+        setState(() => _isProcessing = false);
+        // Optionally show a message: 'Image picking not supported on web.'
+      }
+    } catch (e) {
+      setState(() => _isProcessing = false);
+      // Optionally handle error
     }
   }
 
@@ -7215,9 +7305,9 @@ class _ReceiptScanScreenState extends ConsumerState<ReceiptScanScreen> {
 
     if (devMode) {
       // Add to developer data
-      addDeveloperExpense(_selectedGroupId!, expense);
-      // Force refresh the provider by invalidating it
-      ref.invalidate(developerExpensesProvider(_selectedGroupId!));
+      ref
+          .read(developerExpensesProvider.notifier)
+          .addExpense(_selectedGroupId!, expense);
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Receipt expense added successfully')),
@@ -7365,7 +7455,7 @@ class GroupAnalysisScreen extends ConsumerWidget {
               createdAtMs: 0,
             ),
           );
-      final expenses = ref.watch(developerExpensesProvider(groupId));
+      final expenses = ref.watch(developerExpensesForGroupProvider(groupId));
 
       if (group.id.isEmpty) {
         return Scaffold(
@@ -8684,7 +8774,7 @@ class ExpenseDetailScreen extends ConsumerWidget {
     // Get the expense data
     final expense = devMode
         ? ref
-              .watch(developerExpensesProvider(groupId))
+              .watch(developerExpensesForGroupProvider(groupId))
               .firstWhere(
                 (e) => e.id == expenseId,
                 orElse: () => const Expense(
@@ -9362,8 +9452,9 @@ class ExpenseDetailScreen extends ConsumerWidget {
             onPressed: () async {
               final devMode = ref.read(developerModeProvider);
               if (devMode) {
-                removeDeveloperExpense(expense.groupId, expense.id);
-                ref.invalidate(developerExpensesProvider(expense.groupId));
+                ref
+                    .read(developerExpensesProvider.notifier)
+                    .removeExpense(expense.groupId, expense.id);
               } else {
                 final repo = ref.read(firestoreRepositoryProvider);
                 await repo.removeExpense(

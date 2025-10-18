@@ -1,7 +1,22 @@
 import 'package:flutter/foundation.dart';
+import 'dart:convert';
 
 @immutable
 class Group {
+  static String encodeList(List<Group> groups) {
+    return groups.map((g) => g.toJson()..['id'] = g.id).toList().toString();
+  }
+
+  static List<Group> decodeList(String encoded) {
+    final List<dynamic> list = List<dynamic>.from(
+      (encoded.startsWith('[') && encoded.endsWith(']'))
+          ? (encoded.length > 2 ? (jsonDecode(encoded) as List) : [])
+          : [],
+    );
+    return list
+        .map((e) => Group.fromDoc(e['id'] as String, Map<String, Object?>.from(e)))
+        .toList();
+  }
   const Group({
     required this.id,
     required this.name,

@@ -77,13 +77,13 @@ class _UserProfileScreenState extends ConsumerState<UserProfileScreen> {
         final updatedProfile = UserProfile(
           id: 'dev_user_123',
           displayName: _displayNameController.text.trim(),
-          email: currentProfile?.email ?? 'developer@example.com',
+          email: currentProfile?.value?.email ?? 'developer@example.com',
           phoneNumber: _phoneController.text.trim().isEmpty ? null : _phoneController.text.trim(),
           bio: _bioController.text.trim().isEmpty ? null : _bioController.text.trim(),
-          profileImageUrl: _selectedImagePath ?? currentProfile?.profileImageUrl,
-          createdAtMs: currentProfile?.createdAtMs ?? DateTime.now().millisecondsSinceEpoch,
+          profileImageUrl: _selectedImagePath ?? currentProfile?.value?.profileImageUrl,
+          createdAtMs: currentProfile?.value?.createdAtMs ?? DateTime.now().millisecondsSinceEpoch,
           updatedAtMs: DateTime.now().millisecondsSinceEpoch,
-          preferences: currentProfile?.preferences ?? {},
+          preferences: currentProfile?.value?.preferences ?? {},
         );
         ref.read(developerUserProfilesProvider.notifier).updateProfile(updatedProfile);
         if (mounted) {
@@ -290,11 +290,11 @@ class _UserProfileScreenState extends ConsumerState<UserProfileScreen> {
       // Load profile data into form on first build
       if (userProfile != null && !_profileLoaded) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
-          _loadProfile(userProfile);
+          _loadProfile(userProfile.value);
         });
       }
 
-      return _buildProfileContent(userProfile);
+  return _buildProfileContent(userProfile.value);
     } else {
       // In production mode, use real Firebase data
       final profileAsyncValue = ref.watch(currentUserProfileProvider);

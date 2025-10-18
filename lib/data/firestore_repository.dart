@@ -6,6 +6,16 @@ import '../models/group.dart';
 import '../models/settlement.dart';
 
 class FirestoreRepository {
+  /// Fetch groups once (not a stream)
+  Future<List<Group>> getGroupsOnce(String userId) async {
+    final snap = await _db
+        .collection('groups')
+        .where('memberUserIds', arrayContains: userId)
+        .orderBy('createdAtMs', descending: true)
+        .limit(20)
+        .get();
+    return snap.docs.map((d) => Group.fromDoc(d.id, d.data())).toList();
+  }
   FirestoreRepository(this._db);
   final FirebaseFirestore _db;
 
@@ -109,8 +119,6 @@ class FirestoreRepository {
         .collection('groups')
         .doc(groupId)
         .collection('expenses')
-        .orderBy('createdAtMs', descending: true)
-        .limit(20)
         .snapshots()
         .map(
           (snap) =>
